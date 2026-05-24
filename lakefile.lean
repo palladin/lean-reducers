@@ -1,6 +1,9 @@
 import Lake
 open Lake DSL
 
+require plausible from git
+  "https://github.com/leanprover-community/plausible.git" @ "v4.29.0"
+
 package lean_reducers where
 
 extern_lib leanreducersio pkg := do

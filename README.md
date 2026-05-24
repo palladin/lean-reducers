@@ -30,6 +30,10 @@ lake build
 lake exe lean_reducers_tests
 ```
 
+The test executable uses Plausible to generate arrays, file contents, and
+parallel configurations. Each test compares a reducer pipeline against a
+sequential Lean model of the same producer, transforms, and terminal.
+
 ### Native Backend And Interpreted Runs
 
 Line-oriented file producers use a small native `pread` bridge in compiled
