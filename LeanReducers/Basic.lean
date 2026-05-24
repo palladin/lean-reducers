@@ -1,4 +1,5 @@
 import Init.Data.Float
+import Init.Data.Array.Lemmas
 import Init.System.IO
 import LeanReducers.Internal.Array
 import LeanReducers.Internal.File
@@ -73,7 +74,7 @@ private def filterM (xs : ReducerM m α) (p : α → Bool) : ReducerM m α where
     } : FoldSpec α _)
     xs.run cfg q'
 
-private def foldWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
+private def foldWithLawsWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ := do
   xs.run cfg (FoldSpec.ofMonoid spec step)
 
@@ -82,17 +83,17 @@ Reduce with a proven monoid combiner and caller-provided local step. For
 parallel-grouping-invariant results, the step should agree with the combiner:
 `step a acc = spec.combine (step a spec.unit) acc`.
 -/
-private def foldM (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
+private def foldWithLawsM (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  foldWithConfigM Config.default spec step xs
+  foldWithLawsWithConfigM Config.default spec step xs
 
-private def foldMapWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
+private def foldMapWithLawsWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ :=
-  foldWithConfigM cfg spec (fun a acc => spec.combine (f a) acc) xs
+  foldWithLawsWithConfigM cfg spec (fun a acc => spec.combine (f a) acc) xs
 
-private def foldMapM (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
+private def foldMapWithLawsM (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  foldMapWithConfigM Config.default spec f xs
+  foldMapWithLawsWithConfigM Config.default spec f xs
 
 private def groupByWithConfigM [BEq κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) [Monad m]
@@ -108,28 +109,89 @@ private def groupByM [BEq κ] (valueSpec : MonoidSpec ν) (key : α → κ) (ste
   groupByWithConfigM Config.default valueSpec key step xs
 
 /--
-Approximate fold for operations where the caller does not want to claim monoid
-laws. This is intended for practical numeric reductions such as `Float`, where
-parallel grouping can change the final rounded value.
+Fold without law proofs for operations where the caller does not want to provide
+a `MonoidSpec`. The same parallel regrouping rules still apply; the library
+just does not require proofs for the supplied combiner.
 -/
-private def foldApproxWithConfigM (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
+private def foldWithoutLawsWithConfigM (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
     (step : α → ρ → ρ) [Monad m] (xs : ReducerM m α) : m ρ := do
   xs.run cfg { unit := unit, combine := combine, step := step }
 
-private def foldApproxM (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
+private def foldWithoutLawsM (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ :=
-  foldApproxWithConfigM Config.default unit combine step xs
+  foldWithoutLawsWithConfigM Config.default unit combine step xs
 
 private def sumM [Add α] [OfNat α 0] [LawfulAddMonoid α] [Monad m]
     (xs : ReducerM m α) : m α :=
-  foldM (MonoidSpec.additive α) (fun a acc => a + acc) xs
+  foldWithLawsM (MonoidSpec.additive α) (fun a acc => a + acc) xs
 
 /--
-Floating-point sum is intentionally approximate: IEEE floating-point addition is
+Floating-point sum uses the fold-without-laws path: IEEE floating-point addition is
 not a lawful monoid, so this terminal is separate from `.sum`.
 -/
-private def sumFloatApproxM [Monad m] (xs : ReducerM m Float) : m Float :=
-  foldApproxM (0.0 : Float) (fun a b => a + b) (fun a acc => a + acc) xs
+private def sumFloatM [Monad m] (xs : ReducerM m Float) : m Float :=
+  foldWithoutLawsM (0.0 : Float) (fun a b => a + b) (fun a acc => a + acc) xs
+
+private def reversedArraySpec (α : Type) : MonoidSpec (Array α) where
+  unit := #[]
+  combine := fun left right => right ++ left
+  assoc := by
+    intro a b c
+    simp [Array.append_assoc]
+  left_unit := by
+    intro a
+    simp
+  right_unit := by
+    intro a
+    simp
+
+private def toArrayM [Monad m] (xs : ReducerM m α) : m (Array α) := do
+  let reversed ← foldWithLawsM (reversedArraySpec α) (fun a acc => acc.push a) xs
+  pure reversed.reverse
+
+private def lengthM [Monad m] (xs : ReducerM m α) : m Nat :=
+  foldMapWithLawsM (MonoidSpec.additive Nat) (fun _ => (1 : Nat)) xs
+
+private def minOption [Min α] (left right : Option α) : Option α :=
+  match left, right with
+  | none, other => other
+  | other, none => other
+  | some a, some b => some (min a b)
+
+private def maxOption [Max α] (left right : Option α) : Option α :=
+  match left, right with
+  | none, other => other
+  | other, none => other
+  | some a, some b => some (max a b)
+
+private def minM [Min α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
+  foldWithoutLawsM (none : Option α) (minOption (α := α))
+    (fun a acc => minOption (α := α) (some a) acc) xs
+
+private def maxM [Max α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
+  foldWithoutLawsM (none : Option α) (maxOption (α := α))
+    (fun a acc => maxOption (α := α) (some a) acc) xs
+
+private structure FloatAverage where
+  sum : Float
+  count : Nat
+
+private def avgFloatM [Monad m] (xs : ReducerM m Float) : m (Option Float) := do
+  let total ←
+    foldWithoutLawsM ({ sum := 0.0, count := 0 } : FloatAverage)
+      (fun left right => {
+        sum := left.sum + right.sum
+        count := left.count + right.count
+      })
+      (fun a acc => {
+        sum := a + acc.sum
+        count := acc.count + 1
+      })
+      xs
+  if total.count == 0 then
+    pure none
+  else
+    pure (some (total.sum / Float.ofNat total.count))
 
 def map (xs : Reducer α) (f : α → β) : Reducer β :=
   mapM xs f
@@ -140,19 +202,19 @@ def flatMap (xs : Reducer α) (f : α → Array β) : Reducer β :=
 def filter (xs : Reducer α) (p : α → Bool) : Reducer α :=
   filterM xs p
 
-def foldWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
+def foldWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
     (xs : Reducer α) : ρ :=
-  foldWithConfigM cfg spec step xs
+  foldWithLawsWithConfigM cfg spec step xs
 
-def fold (spec : MonoidSpec ρ) (step : α → ρ → ρ) (xs : Reducer α) : ρ :=
-  foldM spec step xs
+def foldWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) (xs : Reducer α) : ρ :=
+  foldWithLawsM spec step xs
 
-def foldMapWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
+def foldMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
     (xs : Reducer α) : ρ :=
-  foldMapWithConfigM cfg spec f xs
+  foldMapWithLawsWithConfigM cfg spec f xs
 
-def foldMap (spec : MonoidSpec ρ) (f : α → ρ) (xs : Reducer α) : ρ :=
-  foldMapM spec f xs
+def foldMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) (xs : Reducer α) : ρ :=
+  foldMapWithLawsM spec f xs
 
 def groupByWithConfig [BEq κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) (xs : Reducer α) : Array (κ × ν) :=
@@ -162,19 +224,43 @@ def groupBy [BEq κ] (valueSpec : MonoidSpec ν) (key : α → κ) (step : α �
     (xs : Reducer α) : Array (κ × ν) :=
   groupByM valueSpec key step xs
 
-def foldApproxWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
+def foldWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
     (step : α → ρ → ρ) (xs : Reducer α) : ρ :=
-  foldApproxWithConfigM cfg unit combine step xs
+  foldWithoutLawsWithConfigM cfg unit combine step xs
 
-def foldApprox (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
+def foldWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
     (xs : Reducer α) : ρ :=
-  foldApproxM unit combine step xs
+  foldWithoutLawsM unit combine step xs
 
 def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] (xs : Reducer α) : α :=
   sumM xs
 
-def sumFloatApprox (xs : Reducer Float) : Float :=
-  sumFloatApproxM xs
+def sumFloat (xs : Reducer Float) : Float :=
+  sumFloatM xs
+
+def toArray (xs : Reducer α) : Array α :=
+  toArrayM xs
+
+def length (xs : Reducer α) : Nat :=
+  lengthM xs
+
+def min? [Min α] (xs : Reducer α) : Option α :=
+  minM xs
+
+def min [Min α] (xs : Reducer α) (h : xs.min?.isSome) : α :=
+  xs.min?.get h
+
+def max? [Max α] (xs : Reducer α) : Option α :=
+  maxM xs
+
+def max [Max α] (xs : Reducer α) (h : xs.max?.isSome) : α :=
+  xs.max?.get h
+
+def avgFloat (xs : Reducer Float) : Option Float :=
+  avgFloatM xs
+
+def avg (xs : Reducer Float) : Option Float :=
+  avgFloatM xs
 
 end Reducer
 
@@ -189,21 +275,21 @@ def flatMap (xs : ReducerM m α) (f : α → Array β) : ReducerM m β :=
 def filter (xs : ReducerM m α) (p : α → Bool) : ReducerM m α :=
   Reducer.filterM xs p
 
-def foldWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
+def foldWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  Reducer.foldWithConfigM cfg spec step xs
+  Reducer.foldWithLawsWithConfigM cfg spec step xs
 
-def fold (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
+def foldWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  Reducer.foldM spec step xs
+  Reducer.foldWithLawsM spec step xs
 
-def foldMapWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
+def foldMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.foldMapWithConfigM cfg spec f xs
+  Reducer.foldMapWithLawsWithConfigM cfg spec f xs
 
-def foldMap (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
+def foldMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  Reducer.foldMapM spec f xs
+  Reducer.foldMapWithLawsM spec f xs
 
 def groupByWithConfig [BEq κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) [Monad m]
@@ -214,20 +300,38 @@ def groupBy [BEq κ] (valueSpec : MonoidSpec ν) (key : α → κ) (step : α �
     [Monad m] (xs : ReducerM m α) : m (Array (κ × ν)) :=
   Reducer.groupByM valueSpec key step xs
 
-def foldApproxWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
+def foldWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
     (step : α → ρ → ρ) [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.foldApproxWithConfigM cfg unit combine step xs
+  Reducer.foldWithoutLawsWithConfigM cfg unit combine step xs
 
-def foldApprox (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
+def foldWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.foldApproxM unit combine step xs
+  Reducer.foldWithoutLawsM unit combine step xs
 
 def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] [Monad m]
     (xs : ReducerM m α) : m α :=
   Reducer.sumM xs
 
-def sumFloatApprox [Monad m] (xs : ReducerM m Float) : m Float :=
-  Reducer.sumFloatApproxM xs
+def sumFloat [Monad m] (xs : ReducerM m Float) : m Float :=
+  Reducer.sumFloatM xs
+
+def toArray [Monad m] (xs : ReducerM m α) : m (Array α) :=
+  Reducer.toArrayM xs
+
+def length [Monad m] (xs : ReducerM m α) : m Nat :=
+  Reducer.lengthM xs
+
+def min? [Min α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
+  Reducer.minM xs
+
+def max? [Max α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
+  Reducer.maxM xs
+
+def avgFloat [Monad m] (xs : ReducerM m Float) : m (Option Float) :=
+  Reducer.avgFloatM xs
+
+def avg [Monad m] (xs : ReducerM m Float) : m (Option Float) :=
+  Reducer.avgFloatM xs
 
 end ReducerM
 

@@ -3,9 +3,9 @@ import LeanReducers.Algebra
 namespace LeanReducers
 
 /--
-Internal fold description used at runtime. Lawful public folds are constructed
-from `MonoidSpec`; approximate folds such as floating-point reductions use the
-same runtime path without claiming algebraic laws.
+Internal fold description used at runtime. Public folds with laws are
+constructed from `MonoidSpec`; folds without laws, such as floating-point
+reductions, use the same runtime path without claiming algebraic laws.
 -/
 structure FoldSpec (α : Type) (ρ : Type) where
   unit : ρ

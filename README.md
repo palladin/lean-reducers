@@ -66,11 +66,12 @@ producer |> intermediate |> intermediate |> terminal
   `Reducer.readLinesFromFiles` keep the same pipeline shape while adding
   parallelism across files.
 - Intermediate operations such as `map`, `filter`, and `flatMap` transform the
-  reducer without running it. They are fused into the terminal fold instead of
-  allocating intermediate collections.
-- A terminal operation such as `fold`, `foldMap`, `sum`, `sumFloatApprox`, or
-  `groupBy` runs the reduction. Pure reducers return a value directly;
-  effectful reducers return through their producer monad.
+  reducer without running it. They are fused into the terminal fold plan instead
+  of allocating intermediate collections.
+- A terminal operation such as `foldWithLaws`, `foldMapWithLaws`, `foldWithoutLaws`, `toArray`,
+  `length`, `sum`, `sumFloat`, `min?`, `max?`, `avgFloat`, or `groupBy` runs
+  the reduction. Pure reducers return a value directly; effectful reducers
+  return through their producer monad.
 
 For example:
 
@@ -131,13 +132,28 @@ Transforms:
 Terminals:
 
 ```lean
-.fold    : MonoidSpec ρ → (α → ρ → ρ) → ReducerM m α → m ρ
-.foldMap : MonoidSpec ρ → (α → ρ) → ReducerM m α → m ρ
-.sum     : ReducerM m α → m α
+.foldWithLaws    : MonoidSpec ρ → (α → ρ → ρ) → ReducerM m α → m ρ
+.foldMapWithLaws : MonoidSpec ρ → (α → ρ) → ReducerM m α → m ρ
+.foldWithoutLaws : ρ → (ρ → ρ → ρ) → (α → ρ → ρ) → ReducerM m α → m ρ
+.toArray         : ReducerM m α → m (Array α)
+.length         : ReducerM m α → m Nat
+.sum             : ReducerM m α → m α
+.sumFloat        : ReducerM m Float → m Float
+.min?            : [Min α] → ReducerM m α → m (Option α)
+.max?            : [Max α] → ReducerM m α → m (Option α)
+.avgFloat        : ReducerM m Float → m (Option Float)
+.avg             : ReducerM m Float → m (Option Float)
 ```
 
 For pure `Reducer α`, `m` is `Id`, so terminals return the value directly.
 For `ReducerIO α`, terminals return `IO`.
+`min?`, `max?`, and floating averages return `none` for empty reducers.
+Pure reducers also expose total proof-bearing extrema:
+
+```lean
+.min : [Min α] → (xs : Reducer α) → xs.min?.isSome → α
+.max : [Max α] → (xs : Reducer α) → xs.max?.isSome → α
+```
 
 Grouping:
 
@@ -165,6 +181,22 @@ applied for each element in the group. For pure reducers, `m` is `Id`.
     |>.flatMap (fun x => #[x, x * 10])
     |>.sum
 -- 66
+```
+
+### Convenience Terminals
+
+```lean
+#eval
+  #[3, 1, 4, 1, 5]
+    |> Reducer.ofArray
+    |>.min?
+-- some 1
+
+#eval
+  match (#[3.0, 1.0, 4.0] |> Reducer.ofArray |>.avgFloat) with
+  | some avg => avg > 2.0 && avg < 3.0
+  | none => false
+-- true
 ```
 
 ### `groupBy`
@@ -222,14 +254,25 @@ Parallel reduction can regroup chunk results. That is why lawful reductions use
 `MonoidSpec`: the result combiner must be associative and must have a lawful
 unit.
 
+Use `foldWithoutLaws` when you have a useful `unit` and `combine` but do not want
+to provide monoid proofs. The fold still runs in parallel, so the supplied
+combiner should be stable under regrouping if you need deterministic equality
+with a sequential fold.
+
 `Float` is intentionally not a lawful `.sum` target. IEEE floating-point
 addition is not mathematically associative, so the library exposes:
 
 ```lean
-sumFloatApprox : Reducer Float → Float
+sumFloat : Reducer Float → Float
+avgFloat : Reducer Float → Option Float
 ```
 
-and the monadic equivalent for practical approximate floating-point reductions.
+and the monadic equivalents for practical floating-point reductions over the
+without-laws fold path.
+
+Likewise, `min?` and `max?` use the `Min` and `Max` classes. For
+parallel-stable results, those operations should behave consistently under
+regrouping.
 
 ## Configuration
 
@@ -240,9 +283,9 @@ structure Config where
   priority : Task.Priority := Task.Priority.default
 ```
 
-Use `foldWithConfig`, `foldMapWithConfig`, or `groupByWithConfig` to tune
-parallel splitting. For line readers, `grain` is interpreted as a target byte
-chunk size before newline-boundary repair.
+Use `foldWithLawsWithConfig`, `foldMapWithLawsWithConfig`, `foldWithoutLawsWithConfig`, or
+`groupByWithConfig` to tune parallel splitting. For line readers, `grain` is
+interpreted as a target byte chunk size before newline-boundary repair.
 
 ## Design Notes
 
