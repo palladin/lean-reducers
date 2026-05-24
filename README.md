@@ -160,6 +160,7 @@ Grouping:
 ```lean
 .groupBy :
   [BEq κ] →
+  [Hashable κ] →
   MonoidSpec ν →
   (α → κ) →
   (α → ν → ν) →
@@ -168,7 +169,8 @@ Grouping:
 ```
 
 The grouped value starts at the value monoid's `unit`, then the per-key step is
-applied for each element in the group. For pure reducers, `m` is `Id`.
+applied for each element in the group. Group output order is unspecified. For
+pure reducers, `m` is `Id`.
 
 ## Examples
 
@@ -209,6 +211,7 @@ applied for each element in the group. For pure reducers, `m` is `Id`.
       (MonoidSpec.additive Nat)
       (fun row => row.1)
       (fun row acc => row.2 + acc)
+    |>.qsort (fun left right => compare left.1 right.1 == Ordering.lt)
 -- #[("a", 4), ("b", 2)]
 ```
 
@@ -218,8 +221,9 @@ applied for each element in the group. For pure reducers, `m` is `Id`.
 reads those ranges in parallel, then adjusts each range to whole-line boundaries
 so every line is folded exactly once.
 
-`Reducer.readLinesFromFiles` and `Reducer.readLinesFromFilesWithPath` add a
-second level of parallelism across an array of files.
+`Reducer.readLinesFromFiles` and `Reducer.readLinesFromFilesWithPath` use the
+same source byte-range scheduler as `Reducer.readLines`, so skewed file sizes can
+be balanced by splitting large files into multiple ranges.
 
 Because these producers use the native backend in compiled code, interpreted
 `lean --run` sessions need the dynamic libraries described above.
@@ -291,13 +295,14 @@ interpreted as a target byte chunk size before newline-boundary repair.
 
 - Array producers use index-based chunking. Line readers use a small native
   `pread` bridge for true parallel range reads.
-- Multi-file line producers split the file array in parallel, then each file
-  uses the same byte-range line reader. Results are combined in input file order.
+- Line producers schedule over source byte ranges. Single-file reads start from
+  one range, while multi-file reads start from one range per file and may split a
+  large file into multiple ranges.
 - File line chunks are expanded or trimmed at newline boundaries. A line that
   starts exactly at a split belongs to the right chunk, so boundary lines are not
   duplicated.
 - `readFile` and `readChars` still read the whole file before reducing.
 - `map`, `filter`, and `flatMap` are fused by rewriting the terminal fold plan;
   they do not build intermediate pipeline collections.
-- `groupBy` currently uses an `Array (key × value)` accumulator with linear key
-  lookup. This keeps v1 simple and dependency-free.
+- `groupBy` uses a `Std.HashMap` accumulator internally and returns an
+  `Array (key × value)` at the API boundary.

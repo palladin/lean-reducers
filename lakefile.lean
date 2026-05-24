@@ -21,3 +21,11 @@ lean_lib LeanReducers where
 lean_exe lean_reducers_tests where
   root := `Test
   supportInterpreter := true
+
+lean_exe word_count where
+  root := `Examples.WordCount
+  supportInterpreter := true
+
+lean_exe fetch_wikitext103 where
+  root := `Examples.FetchWikiText
+  supportInterpreter := true

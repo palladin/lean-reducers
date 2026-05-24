@@ -1,28 +1,34 @@
-import Init.Data.Array.Basic
+import Std.Data.HashMap.Basic
 import LeanReducers.Algebra
 
 namespace LeanReducers
 namespace Internal
 
-def removeGroupKey [BEq κ] (k : κ) (groups : Array (κ × ν)) : Array (κ × ν) :=
-  groups.foldl (fun acc row => if row.1 == k then acc else acc.push row) #[]
+abbrev Groups (κ ν : Type) [BEq κ] [Hashable κ] :=
+  Std.HashMap κ ν
 
-def groupStep [BEq κ] (valueSpec : MonoidSpec ν) (key : α → κ) (step : α → ν → ν)
-    (a : α) (groups : Array (κ × ν)) : Array (κ × ν) :=
+def emptyGroups [BEq κ] [Hashable κ] : Groups κ ν :=
+  {}
+
+def groupsToArray [BEq κ] [Hashable κ] (groups : Groups κ ν) : Array (κ × ν) :=
+  groups.toArray
+
+def groupStep [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
+    (step : α → ν → ν) (a : α) (groups : Groups κ ν) : Groups κ ν :=
   let k := key a
-  match groups.find? (fun row => row.1 == k) with
-  | some row => #[(k, step a row.2)] ++ removeGroupKey k groups
-  | none => #[(k, step a valueSpec.unit)] ++ groups
+  groups.insert k (step a (groups.getD k valueSpec.unit))
 
-def mergeGroupInto [BEq κ] (valueSpec : MonoidSpec ν)
-    (groups : Array (κ × ν)) (row : κ × ν) : Array (κ × ν) :=
-  match groups.findIdx? (fun existing => existing.1 == row.1) with
-  | some i => groups.modify i (fun existing => (existing.1, valueSpec.combine existing.2 row.2))
-  | none => groups.push row
+def mergeGroupInto [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν)
+    (groups : Groups κ ν) (k : κ) (v : ν) : Groups κ ν :=
+  let value :=
+    match groups.get? k with
+    | some existing => valueSpec.combine existing v
+    | none => v
+  groups.insert k value
 
-def mergeGroups [BEq κ] (valueSpec : MonoidSpec ν)
-    (left right : Array (κ × ν)) : Array (κ × ν) :=
-  right.foldl (mergeGroupInto valueSpec) left
+def mergeGroups [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν)
+    (left right : Groups κ ν) : Groups κ ν :=
+  right.fold (mergeGroupInto valueSpec) left
 
 end Internal
 end LeanReducers

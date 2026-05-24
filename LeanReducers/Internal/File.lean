@@ -98,66 +98,135 @@ def foldFileLineRange (q : FoldSpec String ρ) (path : System.FilePath)
     | some text => pure (foldLineString q (actualStop >= fileSize) text)
     | none => throw <| IO.userError s!"Tried to read file '{path}' containing non UTF-8 data."
 
-partial def foldFileLinesIOCore (cfg : Config) (q : FoldSpec String ρ)
-    (path : System.FilePath) (fileSize start stop : Nat) : Nat → IO ρ
-  | 0 => foldFileLineRange q path fileSize start stop
-  | depth + 1 => do
-      let len := stop - start
-      if len ≤ cfg.grain then
-        foldFileLineRange q path fileSize start stop
-      else if len ≤ 1 then
-        foldFileLineRange q path fileSize start stop
-      else
-        let mid := start + len / 2
-        let rightTask ← IO.asTask
-          (foldFileLinesIOCore cfg q path fileSize mid stop depth)
-          cfg.priority
-        let left ← foldFileLinesIOCore cfg q path fileSize start mid depth
-        match rightTask.get with
-        | Except.ok right => pure (q.combine left right)
-        | Except.error err => throw err
+structure FileLineRange where
+  source : System.FilePath
+  fileSize : Nat
+  start : Nat
+  stop : Nat
 
-def foldFileLinesIO (cfg : Config) (q : FoldSpec String ρ)
-    (path : System.FilePath) : IO ρ := do
+def fileLineRangeOfPath (path : System.FilePath) : IO FileLineRange := do
   let metadata ← path.metadata
   let fileSize := metadata.byteSize.toNat
-  if fileSize == 0 then
+  pure { source := path, fileSize := fileSize, start := 0, stop := fileSize }
+
+def fileLineRangesOfPaths (paths : Array System.FilePath) : IO (Array FileLineRange) := do
+  let mut ranges := #[]
+  for path in paths do
+    ranges := ranges.push (← fileLineRangeOfPath path)
+  pure ranges
+
+def fileLineRangeBytes (range : FileLineRange) : Nat :=
+  range.stop - range.start
+
+def fileLineRangesBytes (ranges : Array FileLineRange) : Nat :=
+  ranges.foldl (fun total range => total + fileLineRangeBytes range) 0
+
+def foldFileLineSourceRange (q : FoldSpec String ρ) (range : FileLineRange) : IO ρ := do
+  if range.fileSize == 0 then
     pure (q.step "" q.unit)
   else
-    foldFileLinesIOCore cfg q path fileSize 0 fileSize cfg.maxDepth
+    foldFileLineRange q range.source range.fileSize range.start range.stop
 
-def foldFileLineReadersIORange (unit : ρ) (combine : ρ → ρ → ρ)
-    (foldOne : System.FilePath → IO ρ) (paths : Array System.FilePath)
-    (start stop : Nat) : IO ρ := do
+def splitFileLineRangesByCount (ranges : Array FileLineRange) :
+    Option (Array FileLineRange × Array FileLineRange) :=
+  let mid := ranges.size / 2
+  if mid == 0 || mid == ranges.size then
+    none
+  else
+    some (ranges.extract 0 mid, ranges.extract mid ranges.size)
+
+def splitFileLineRangesAtHalf (ranges : Array FileLineRange) :
+    Option (Array FileLineRange × Array FileLineRange) :=
+  let total := fileLineRangesBytes ranges
+  if total == 0 then
+    splitFileLineRangesByCount ranges
+  else
+    let target := total / 2
+    if target == 0 then
+      splitFileLineRangesByCount ranges
+    else
+      Id.run do
+        let mut left : Array FileLineRange := #[]
+        let mut right : Array FileLineRange := #[]
+        let mut leftBytes := 0
+        let mut onRight := false
+        for range in ranges do
+          if onRight then
+            right := right.push range
+          else
+            let bytes := fileLineRangeBytes range
+            if bytes == 0 then
+              left := left.push range
+            else if leftBytes + bytes < target then
+              left := left.push range
+              leftBytes := leftBytes + bytes
+            else if leftBytes + bytes == target then
+              left := left.push range
+              leftBytes := target
+              onRight := true
+            else
+              let cutBytes := target - leftBytes
+              if cutBytes == 0 then
+                right := right.push range
+              else if cutBytes >= bytes then
+                left := left.push range
+                leftBytes := leftBytes + bytes
+              else
+                let mid := range.start + cutBytes
+                left := left.push { range with stop := mid }
+                right := right.push { range with start := mid }
+                leftBytes := target
+              onRight := true
+        if left.isEmpty || right.isEmpty then
+          splitFileLineRangesByCount ranges
+        else
+          some (left, right)
+
+def foldFileLineRangesIORange (unit : ρ) (combine : ρ → ρ → ρ)
+    (foldOne : FileLineRange → IO ρ) (ranges : Array FileLineRange) : IO ρ := do
   let mut acc := unit
-  for path in paths.extract start stop do
-    let result ← foldOne path
+  for range in ranges do
+    let result ← foldOne range
     acc := combine acc result
   pure acc
 
-partial def foldFileLineReadersIOCore (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
-    (foldOne : System.FilePath → IO ρ) (paths : Array System.FilePath)
-    (start stop : Nat) : Nat → IO ρ
-  | 0 => foldFileLineReadersIORange unit combine foldOne paths start stop
+partial def foldFileLineRangesIOCore (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
+    (foldOne : FileLineRange → IO ρ) (ranges : Array FileLineRange) : Nat → IO ρ
+  | 0 => foldFileLineRangesIORange unit combine foldOne ranges
   | depth + 1 => do
-      let len := stop - start
-      if len ≤ 1 then
-        foldFileLineReadersIORange unit combine foldOne paths start stop
+      let bytes := fileLineRangesBytes ranges
+      if ranges.isEmpty then
+        pure unit
+      else if bytes ≤ cfg.grain then
+        foldFileLineRangesIORange unit combine foldOne ranges
+      else if bytes ≤ 1 then
+        foldFileLineRangesIORange unit combine foldOne ranges
       else
-        let mid := start + len / 2
-        let rightTask ← IO.asTask
-          (foldFileLineReadersIOCore cfg unit combine foldOne paths mid stop depth)
-          cfg.priority
-        let left ← foldFileLineReadersIOCore cfg unit combine foldOne paths start mid depth
-        match rightTask.get with
-        | Except.ok right => pure (combine left right)
-        | Except.error err => throw err
+        match splitFileLineRangesAtHalf ranges with
+        | none => foldFileLineRangesIORange unit combine foldOne ranges
+        | some (leftRanges, rightRanges) =>
+            let rightTask ← IO.asTask
+              (foldFileLineRangesIOCore cfg unit combine foldOne rightRanges depth)
+              cfg.priority
+            let left ← foldFileLineRangesIOCore cfg unit combine foldOne leftRanges depth
+            match rightTask.get with
+            | Except.ok right => pure (combine left right)
+            | Except.error err => throw err
+
+def foldFileLineRangesIO (cfg : Config) (q : FoldSpec String ρ)
+    (ranges : Array FileLineRange) : IO ρ :=
+  foldFileLineRangesIOCore cfg q.unit q.combine (foldFileLineSourceRange q)
+    ranges cfg.maxDepth
+
+def foldFileLinesIO (cfg : Config) (q : FoldSpec String ρ)
+    (path : System.FilePath) : IO ρ := do
+  let ranges ← fileLineRangesOfPaths #[path]
+  foldFileLineRangesIO cfg q ranges
 
 def foldFilesLinesIO (cfg : Config) (q : FoldSpec String ρ)
-    (paths : Array System.FilePath) : IO ρ :=
-  foldFileLineReadersIOCore cfg q.unit q.combine
-    (fun path => foldFileLinesIO cfg q path)
-    paths 0 paths.size cfg.maxDepth
+    (paths : Array System.FilePath) : IO ρ := do
+  let ranges ← fileLineRangesOfPaths paths
+  foldFileLineRangesIO cfg q ranges
 
 def fileLineWithPathSpec (q : FoldSpec (System.FilePath × String) ρ)
     (path : System.FilePath) : FoldSpec String ρ where
@@ -165,11 +234,16 @@ def fileLineWithPathSpec (q : FoldSpec (System.FilePath × String) ρ)
   combine := q.combine
   step := fun line acc => q.step (path, line) acc
 
+def foldFileLineRangesWithPathIO (cfg : Config) (q : FoldSpec (System.FilePath × String) ρ)
+    (ranges : Array FileLineRange) : IO ρ :=
+  foldFileLineRangesIOCore cfg q.unit q.combine
+    (fun range => foldFileLineSourceRange (fileLineWithPathSpec q range.source) range)
+    ranges cfg.maxDepth
+
 def foldFilesLinesWithPathIO (cfg : Config) (q : FoldSpec (System.FilePath × String) ρ)
-    (paths : Array System.FilePath) : IO ρ :=
-  foldFileLineReadersIOCore cfg q.unit q.combine
-    (fun path => foldFileLinesIO cfg (fileLineWithPathSpec q path) path)
-    paths 0 paths.size cfg.maxDepth
+    (paths : Array System.FilePath) : IO ρ := do
+  let ranges ← fileLineRangesOfPaths paths
+  foldFileLineRangesWithPathIO cfg q ranges
 
 end Internal
 end LeanReducers

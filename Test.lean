@@ -317,6 +317,18 @@ def runPureArrayProperties : IO Unit := do
     (pureArrayConfigProperty propGroupByWithConfigMatchesSeq)
   checkProp "groupBy"
     (pureArrayProperty propGroupByMatchesSeq)
+  let distinctData := (List.range 500).toArray
+  let distinctGroups :=
+    distinctData
+      |> Reducer.ofArray
+      |>.groupBy (MonoidSpec.additive Nat) id (fun x acc => x + 1 + acc)
+  assertEq "groupBy high-cardinality keys: size" distinctData.size distinctGroups.size
+  let distinctTotals :=
+    (List.range 500).map fun k =>
+      distinctGroups.foldl (fun acc row => if row.1 == k then row.2 else acc) 0
+  assertEq "groupBy high-cardinality keys"
+    ((List.range 500).map (fun k => k + 1)) distinctTotals
+  ok "groupBy high-cardinality keys" "500 distinct keys"
   checkProp "foldWithoutLaws"
     (pureArrayProperty propFoldWithoutLawsMatchesSeq)
   checkProp "sum Nat"
@@ -594,6 +606,31 @@ def runFileProperties : IO Unit := do
   assertEq "large line boundary repair against sequential split"
     (boundaryContents.splitOn "\n") actual
   ok "large line boundary repair" "1 targeted case"
+
+  let skewSmallPath : System.FilePath := "/private/tmp/lean_reducers_prop_skew_small.txt"
+  let skewLargePath : System.FilePath := "/private/tmp/lean_reducers_prop_skew_large.txt"
+  let skewSmallContents := "small\n"
+  let skewLongLine := String.ofList (List.replicate 5000 's')
+  let skewLargeContents := s!"large-first\n{skewLongLine}\nlarge-last\n"
+  IO.FS.writeFile skewSmallPath skewSmallContents
+  IO.FS.writeFile skewLargePath skewLargeContents
+  let skewCfg := cfgOf 7 12
+  let skewExpected := skewSmallContents.splitOn "\n" ++ skewLargeContents.splitOn "\n"
+  let skewActual ←
+    Reducer.readLinesFromFiles #[skewSmallPath, skewLargePath]
+      |> collectReducerIOWithConfig skewCfg
+  assertEq "source range split across skewed files"
+    skewExpected skewActual
+  let skewActualWithPath ←
+    Reducer.readLinesFromFilesWithPath #[skewSmallPath, skewLargePath]
+      |>.map (fun row => (toString row.1, row.2))
+      |> collectReducerIOWithConfig skewCfg
+  let skewExpectedWithPath :=
+    (skewSmallContents.splitOn "\n").map (fun line => (toString skewSmallPath, line)) ++
+    (skewLargeContents.splitOn "\n").map (fun line => (toString skewLargePath, line))
+  assertEq "source range split across skewed files with path"
+    skewExpectedWithPath skewActualWithPath
+  ok "source range split across skewed files" "2 targeted cases"
 
 def main : IO Unit := do
   IO.println "LeanReducers property test report"

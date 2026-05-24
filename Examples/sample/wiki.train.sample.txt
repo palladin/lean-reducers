@@ -1,0 +1,9 @@
+= Reducer Example =
+
+Reducers count words without building intermediate collections.
+Reducers map lines, split words, and merge counts.
+
+= Parallel Example =
+
+Parallel reducers merge counts from chunks.
+Counts from chunks should agree with counts from one pass.

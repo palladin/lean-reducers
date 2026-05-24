@@ -95,17 +95,18 @@ private def foldMapWithLawsM (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
   foldMapWithLawsWithConfigM Config.default spec f xs
 
-private def groupByWithConfigM [BEq κ] (cfg : Config) (valueSpec : MonoidSpec ν)
+private def groupByWithConfigM [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) [Monad m]
     (xs : ReducerM m α) : m (Array (κ × ν)) := do
-  xs.run cfg {
-    unit := #[]
+  let groups ← xs.run cfg {
+    unit := Internal.emptyGroups
     combine := Internal.mergeGroups valueSpec
     step := Internal.groupStep valueSpec key step
   }
+  pure (Internal.groupsToArray groups)
 
-private def groupByM [BEq κ] (valueSpec : MonoidSpec ν) (key : α → κ) (step : α → ν → ν)
-    [Monad m] (xs : ReducerM m α) : m (Array (κ × ν)) :=
+private def groupByM [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
+    (step : α → ν → ν) [Monad m] (xs : ReducerM m α) : m (Array (κ × ν)) :=
   groupByWithConfigM Config.default valueSpec key step xs
 
 /--
@@ -216,12 +217,12 @@ def foldMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → 
 def foldMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) (xs : Reducer α) : ρ :=
   foldMapWithLawsM spec f xs
 
-def groupByWithConfig [BEq κ] (cfg : Config) (valueSpec : MonoidSpec ν)
+def groupByWithConfig [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) (xs : Reducer α) : Array (κ × ν) :=
   groupByWithConfigM cfg valueSpec key step xs
 
-def groupBy [BEq κ] (valueSpec : MonoidSpec ν) (key : α → κ) (step : α → ν → ν)
-    (xs : Reducer α) : Array (κ × ν) :=
+def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
+    (step : α → ν → ν) (xs : Reducer α) : Array (κ × ν) :=
   groupByM valueSpec key step xs
 
 def foldWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
@@ -291,13 +292,13 @@ def foldMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
   Reducer.foldMapWithLawsM spec f xs
 
-def groupByWithConfig [BEq κ] (cfg : Config) (valueSpec : MonoidSpec ν)
+def groupByWithConfig [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) [Monad m]
     (xs : ReducerM m α) : m (Array (κ × ν)) :=
   Reducer.groupByWithConfigM cfg valueSpec key step xs
 
-def groupBy [BEq κ] (valueSpec : MonoidSpec ν) (key : α → κ) (step : α → ν → ν)
-    [Monad m] (xs : ReducerM m α) : m (Array (κ × ν)) :=
+def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
+    (step : α → ν → ν) [Monad m] (xs : ReducerM m α) : m (Array (κ × ν)) :=
   Reducer.groupByM valueSpec key step xs
 
 def foldWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
