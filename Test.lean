@@ -107,31 +107,94 @@ def main : IO Unit := do
   IO.FS.writeFile path "alpha\nbeta\ngamma\n"
 
   let fileLineChars ←
-    Reducer.ofFileLines path
+    Reducer.readLines path
       |>.map String.length
       |>.sum
   assertEq "file line char sum" 14 fileLineChars
 
   let fileContentChars ←
-    Reducer.ofFile path
+    Reducer.readFile path
       |>.foldMap (MonoidSpec.additive Nat) String.length
   assertEq "file content char count" 17 fileContentChars
 
   let fileChars ←
-    Reducer.ofFileChars path
+    Reducer.readChars path
       |>.foldMap (MonoidSpec.additive Nat) (fun _ => 1)
   assertEq "file char count" 17 fileChars
 
   let fileFlatMapped ←
-    Reducer.ofFileLines path
+    Reducer.readLines path
       |>.flatMap (fun line => #[line.length, line.length + 1])
       |>.sum
   assertEq "file flatMap line length sum" 32 fileFlatMapped
 
   let fileGrouped ←
-    Reducer.ofFileLines path
+    Reducer.readLines path
       |>.filter (fun line => line != "")
       |>.groupBy (MonoidSpec.additive Nat) String.length (fun _ acc => 1 + acc)
   assertBool "file groupBy line length count" (fileGrouped == #[(5, 2), (4, 1)])
+
+  let lineListUnit : List String := []
+  let lineListCombine (left right : List String) : List String := left ++ right
+  let lineListStep (line : String) (acc : List String) : List String := line :: acc
+
+  let boundaryCfg : Config := {
+    grain := 7
+    maxDepth := 10
+    priority := Task.Priority.default
+  }
+
+  let multiPathA : System.FilePath := "/private/tmp/lean_reducers_multi_a.txt"
+  let multiPathB : System.FilePath := "/private/tmp/lean_reducers_multi_b.txt"
+  IO.FS.writeFile multiPathA "aa\nbbb\n"
+  IO.FS.writeFile multiPathB "c\ndd"
+
+  let multiFileLineLengths ←
+    Reducer.readLinesFromFiles #[multiPathA, multiPathB]
+      |>.map String.length
+      |>.sum
+  assertEq "multi-file line length sum" 8 multiFileLineLengths
+
+  let pathLineListUnit : List (String × String) := []
+  let pathLineListCombine (left right : List (String × String)) : List (String × String) :=
+    left ++ right
+  let pathLineListStep (row : System.FilePath × String)
+      (acc : List (String × String)) : List (String × String) :=
+    (toString row.1, row.2) :: acc
+  let pathLines ←
+    Reducer.readLinesFromFilesWithPath #[multiPathA, multiPathB]
+      |>.foldApproxWithConfig boundaryCfg pathLineListUnit pathLineListCombine pathLineListStep
+  assertBool "multi-file lines preserve path and order"
+    (pathLines == [
+      (toString multiPathA, "aa"),
+      (toString multiPathA, "bbb"),
+      (toString multiPathA, ""),
+      (toString multiPathB, "c"),
+      (toString multiPathB, "dd")
+    ])
+
+  let boundaryPath : System.FilePath := "/private/tmp/lean_reducers_boundary_lines.txt"
+  let longLine := String.ofList (List.replicate 5000 'x')
+  IO.FS.writeFile boundaryPath s!"first\n{longLine}\n\nlast\n"
+  let boundaryLines ←
+    Reducer.readLines boundaryPath
+      |>.foldApproxWithConfig boundaryCfg lineListUnit lineListCombine lineListStep
+  assertBool "parallel file lines preserve chunk boundaries"
+    (boundaryLines == ["first", longLine, "", "last", ""])
+
+  let noTrailingPath : System.FilePath := "/private/tmp/lean_reducers_no_trailing_newline.txt"
+  IO.FS.writeFile noTrailingPath "aa\n\nbbb\ncccc"
+  let noTrailingLines ←
+    Reducer.readLines noTrailingPath
+      |>.foldApproxWithConfig boundaryCfg lineListUnit lineListCombine lineListStep
+  assertBool "parallel file lines without trailing newline"
+    (noTrailingLines == ["aa", "", "bbb", "cccc"])
+
+  let emptyPath : System.FilePath := "/private/tmp/lean_reducers_empty_file.txt"
+  IO.FS.writeFile emptyPath ""
+  let emptyLines ←
+    Reducer.readLines emptyPath
+      |>.foldApproxWithConfig boundaryCfg lineListUnit lineListCombine lineListStep
+  assertBool "parallel empty file lines" (emptyLines == [""])
 
   IO.println "lean_reducers_tests: ok"
