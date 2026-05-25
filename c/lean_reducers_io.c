@@ -13,7 +13,6 @@
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #include <mach/processor_info.h>
-#include <sys/resource.h>
 #endif
 
 #ifdef _WIN32
@@ -27,6 +26,7 @@
 #define LR_O_BINARY _O_BINARY
 #else
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #define LR_OPEN open
 #define LR_CLOSE close
@@ -54,17 +54,39 @@ static int lean_reducers_append_sample_field(char * out, size_t cap, size_t * us
     return 0;
 }
 
-static lean_obj_res lean_reducers_process_sample_ok(uint64_t rss_kb, uint64_t read_bytes, uint64_t write_bytes) {
+static lean_obj_res lean_reducers_process_sample_ok(
+        uint64_t rss_kb,
+        uint64_t read_bytes,
+        uint64_t write_bytes,
+        uint64_t cpu_micros) {
     char out[128];
     size_t used = 0;
     out[0] = '\0';
     if (lean_reducers_append_sample_field(out, sizeof(out), &used, rss_kb) != 0 ||
         lean_reducers_append_sample_field(out, sizeof(out), &used, read_bytes) != 0 ||
-        lean_reducers_append_sample_field(out, sizeof(out), &used, write_bytes) != 0) {
+        lean_reducers_append_sample_field(out, sizeof(out), &used, write_bytes) != 0 ||
+        lean_reducers_append_sample_field(out, sizeof(out), &used, cpu_micros) != 0) {
         return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("process sample buffer was too small")));
     }
     return lean_io_result_mk_ok(lean_mk_string(out));
 }
+
+#ifndef _WIN32
+static uint64_t lean_reducers_process_cpu_micros(void) {
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0) {
+        return LEAN_REDUCERS_UNKNOWN_U64;
+    }
+
+    uint64_t user =
+        (uint64_t)usage.ru_utime.tv_sec * 1000000ULL +
+        (uint64_t)usage.ru_utime.tv_usec;
+    uint64_t system =
+        (uint64_t)usage.ru_stime.tv_sec * 1000000ULL +
+        (uint64_t)usage.ru_stime.tv_usec;
+    return user + system;
+}
+#endif
 
 static lean_obj_res lean_reducers_cpu_percentages_ok(unsigned int const * percentages, size_t count) {
     if (count == 0) {
@@ -303,6 +325,7 @@ LEAN_EXPORT lean_obj_res lean_reducers_process_sample(void) {
     uint64_t rss_kb = LEAN_REDUCERS_UNKNOWN_U64;
     uint64_t read_bytes = LEAN_REDUCERS_UNKNOWN_U64;
     uint64_t write_bytes = LEAN_REDUCERS_UNKNOWN_U64;
+    uint64_t cpu_micros = lean_reducers_process_cpu_micros();
 
     struct rusage_info_v4 rusage;
     memset(&rusage, 0, sizeof(rusage));
@@ -316,7 +339,7 @@ LEAN_EXPORT lean_obj_res lean_reducers_process_sample(void) {
         write_bytes = rusage.ri_diskio_byteswritten;
     }
 
-    return lean_reducers_process_sample_ok(rss_kb, read_bytes, write_bytes);
+    return lean_reducers_process_sample_ok(rss_kb, read_bytes, write_bytes, cpu_micros);
 }
 #elif defined(__linux__)
 static uint64_t lean_reducers_linux_rss_kb(void) {
@@ -369,8 +392,9 @@ LEAN_EXPORT lean_obj_res lean_reducers_process_sample(void) {
     uint64_t rss_kb = lean_reducers_linux_rss_kb();
     uint64_t read_bytes = LEAN_REDUCERS_UNKNOWN_U64;
     uint64_t write_bytes = LEAN_REDUCERS_UNKNOWN_U64;
+    uint64_t cpu_micros = lean_reducers_process_cpu_micros();
     lean_reducers_linux_io_bytes(&read_bytes, &write_bytes);
-    return lean_reducers_process_sample_ok(rss_kb, read_bytes, write_bytes);
+    return lean_reducers_process_sample_ok(rss_kb, read_bytes, write_bytes, cpu_micros);
 }
 #else
 LEAN_EXPORT lean_obj_res lean_reducers_process_sample(void) {

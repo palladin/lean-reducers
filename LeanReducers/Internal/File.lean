@@ -143,10 +143,12 @@ structure ProcessSample where
   rssKB : Option Nat
   readBytes : Option Nat
   writeBytes : Option Nat
+  cpuMicros : Option Nat
 
 structure ProcessIORates where
   readTenths : Option Nat := none
   writeTenths : Option Nat := none
+  cpuPercentTenths : Option Nat := none
 
 structure DiagnosticsRenderState where
   renderedLines : Nat := 0
@@ -261,17 +263,18 @@ private def sampleCpuPercentages : IO (Array Nat) := do
 private def sampleProcess : IO (Option ProcessSample) := do
   try
     let fields := wordsAscii (← processSampleString)
-    match fields[0]?, fields[1]?, fields[2]? with
-    | some rss, some readBytes, some writeBytes =>
+    match fields[0]?, fields[1]?, fields[2]?, fields[3]? with
+    | some rss, some readBytes, some writeBytes, some cpuMicros =>
         let sample : ProcessSample := {
           rssKB := parseOptionalNat rss,
           readBytes := parseOptionalNat readBytes,
-          writeBytes := parseOptionalNat writeBytes
+          writeBytes := parseOptionalNat writeBytes,
+          cpuMicros := parseOptionalNat cpuMicros
         }
-        match sample.rssKB, sample.readBytes, sample.writeBytes with
-        | none, none, none => pure none
-        | _, _, _ => pure (some sample)
-    | _, _, _ => pure none
+        match sample.rssKB, sample.readBytes, sample.writeBytes, sample.cpuMicros with
+        | none, none, none, none => pure none
+        | _, _, _, _ => pure (some sample)
+    | _, _, _, _ => pure none
   catch
   | _ => pure none
 
@@ -287,11 +290,20 @@ private def averageCpuPercent (samples : Array Nat) : Option Nat :=
   else
     some (samples.foldl (fun total pct => total + pct) 0 / samples.size)
 
+private def percentTenthsValue (cfg : DiagnosticsConfig) (pct? : Option Nat) : String :=
+  match pct? with
+  | some pct => value cfg s!"{formatTenths pct}%"
+  | none => dim cfg "n/a"
+
 private def cpuSummaryLayer (cfg : DiagnosticsConfig) (samples : Array Nat)
-    (cpuBars : Nat) : String :=
-  match averageCpuPercent samples with
-  | some pct => s!"  {label cfg "CPU     "} os avg {value cfg s!"{pct}%"}  bars {value cfg (toString cpuBars)}"
-  | none => s!"  {label cfg "CPU     "} os avg {dim cfg "n/a"}  bars {value cfg (toString cpuBars)}"
+    (cpuBars : Nat) (processCpu? : Option Nat) : String :=
+  let osAvg :=
+    match averageCpuPercent samples with
+    | some pct => value cfg s!"{pct}%"
+    | none => dim cfg "n/a"
+  s!"  {label cfg "CPU     "} os avg {osAvg}  " ++
+  s!"proc {percentTenthsValue cfg processCpu?}  " ++
+  s!"bars {value cfg (toString cpuBars)}"
 
 private def cpuLayerRows (cfg : DiagnosticsConfig) (samples : Array Nat)
     (cpuBars : Nat) : List String :=
@@ -310,6 +322,16 @@ private def sampleRateTenths (previous? current? : Option Nat) (elapsedMs : Nat)
       some (mbPerSecondTenths (if current >= previous then current - previous else 0) elapsedMs)
   | _, _ => none
 
+private def sampleCpuPercentTenths (previous? current? : Option Nat) (elapsedMs : Nat) :
+    Option Nat :=
+  match previous?, current? with
+  | some previous, some current =>
+      if elapsedMs == 0 then
+        some 0
+      else
+        some ((if current >= previous then current - previous else 0) / elapsedMs)
+  | _, _ => none
+
 private def sampleIORates (renderState : IO.Ref DiagnosticsRenderState) (now : Nat)
     (sample? : Option ProcessSample) : IO ProcessIORates := do
   let render ← renderState.get
@@ -317,7 +339,9 @@ private def sampleIORates (renderState : IO.Ref DiagnosticsRenderState) (now : N
     match render.lastSampleMs, render.lastProcessSample, sample? with
     | some lastMs, some previous, some current => {
         readTenths := sampleRateTenths previous.readBytes current.readBytes (now - lastMs),
-        writeTenths := sampleRateTenths previous.writeBytes current.writeBytes (now - lastMs)
+        writeTenths := sampleRateTenths previous.writeBytes current.writeBytes (now - lastMs),
+        cpuPercentTenths :=
+          sampleCpuPercentTenths previous.cpuMicros current.cpuMicros (now - lastMs)
       }
     | _, _, _ => {}
   match sample? with
@@ -386,7 +410,7 @@ private def renderDiagnosticsFrame (cfg : DiagnosticsConfig)
     s!"{value cfg s!"{formatTenths pct}%"}  " ++
     s!"{dim cfg s!"{formatTenths doneMB}/{formatTenths totalMB} MB"}"
   let io := ioLayer cfg ioRates
-  let cpuSummary := cpuSummaryLayer cfg cpuSamples state.cpuBars
+  let cpuSummary := cpuSummaryLayer cfg cpuSamples state.cpuBars ioRates.cpuPercentTenths
   let cpuRows := cpuLayerRows cfg cpuSamples state.cpuBars
   let memory := memoryLayer cfg sample?
   let ranges :=

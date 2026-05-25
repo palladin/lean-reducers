@@ -31,6 +31,14 @@ Run a simple sequential baseline over the same input:
 lake exe word_count --baseline --top 25 Examples/data/wikitext-103/train.csv
 ```
 
+Try different reducer split depths:
+
+```sh
+lake exe word_count --max-depth 0 --top 25 Examples/data/wikitext-103/train.csv
+lake exe word_count --max-depth 5 --top 25 Examples/data/wikitext-103/train.csv
+lake exe word_count --max-depth 6 --top 25 Examples/data/wikitext-103/train.csv
+```
+
 Show the colorized, top-anchored diagnostics panel with per-CPU bars while it
 runs:
 

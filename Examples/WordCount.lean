@@ -12,12 +12,14 @@ structure Options where
   paths : Array System.FilePath := #[]
   diagnostics : DiagnosticsConfig := {}
   baseline : Bool := false
+  maxDepth : Nat := Config.default.maxDepth
 
 private def usage : String :=
   String.intercalate "\n" [
-    "Usage: lake exe word_count [--top N] [--baseline] [--diagnostics] [--diagnostics-output console|stderr|stdout] <text-file>...",
+    "Usage: lake exe word_count [--top N] [--baseline] [--max-depth N] [--diagnostics] [--diagnostics-output console|stderr|stdout] <text-file>...",
     "",
     "--baseline              run a simple sequential baseline implementation",
+    "--max-depth             set reducer split depth; ranges are capped at 2^N",
     "--diagnostics           show a colorized top-anchored diagnostics panel with per-CPU bars",
     "--diagnostics-output    choose where the diagnostics panel is emitted"
   ]
@@ -36,6 +38,12 @@ private def parseArgs : List String -> Options -> Except String Options
       | none => .error s!"--top expects a natural number, got {n}"
   | "--top" :: [], _ =>
       .error "--top expects a natural number"
+  | "--max-depth" :: n :: rest, opts =>
+      match n.toNat? with
+      | some maxDepth => parseArgs rest { opts with maxDepth := maxDepth }
+      | none => .error s!"--max-depth expects a natural number, got {n}"
+  | "--max-depth" :: [], _ =>
+      .error "--max-depth expects a natural number"
   | "--baseline" :: rest, opts =>
       parseArgs rest { opts with baseline := true }
   | "--diagnostics" :: rest, opts =>
@@ -53,7 +61,10 @@ private def parseArgs : List String -> Options -> Except String Options
   | "--help" :: _, opts =>
       .ok opts
   | arg :: rest, opts =>
-      parseArgs rest { opts with paths := opts.paths.push arg }
+      if arg.startsWith "--" then
+        .error s!"unknown option: {arg}"
+      else
+        parseArgs rest { opts with paths := opts.paths.push arg }
 
 private structure TokenState where
   words : Array String
@@ -187,8 +198,13 @@ def main (args : List String) : IO Unit := do
       if opts.baseline then
         pure ("sequential baseline", ← wordCountsBaseline opts.paths)
       else
-        let cfg : Config := { Config.default with diagnostics := opts.diagnostics }
-        pure ("parallel reducer", ← wordCounts cfg opts.paths)
+        let cfg : Config := { Config.default with maxDepth := opts.maxDepth, diagnostics := opts.diagnostics }
+        let name :=
+          if opts.maxDepth == 0 then
+            s!"sequential reducer (maxDepth {opts.maxDepth})"
+          else
+            s!"parallel reducer (maxDepth {opts.maxDepth})"
+        pure (name, ← wordCounts cfg opts.paths)
     let elapsedMs := (← IO.monoMsNow) - startMs
     printTop opts.paths opts.top implementation elapsedMs counts
 
