@@ -1,11 +1,16 @@
 # LeanReducers
 
-Parallel, fused reducers for Lean 4.
+Fused sequential and parallel reducers for Lean 4.
 
-`LeanReducers` is a small library for reducing data in parallel with Lean's
-`Task`. The core design is law-aware: terminal reductions are based on a
-`MonoidSpec`, so the combiner and unit carry the laws needed for safe chunk
-combination.
+`LeanReducers` provides two explicit pipeline modes:
+
+- `ReducerSeq` is the lightweight sequential API. Its core terminal is
+  `reduce unit step`; it does not require algebraic proofs or parallel config.
+- `ReducerPar` is the parallel API. It uses Lean's `Task`, and its lawful
+  terminals accept a `MonoidSpec` so chunk results can be combined safely.
+
+Both modes fuse transforms into the terminal reduction instead of allocating
+intermediate pipeline collections.
 
 ## Quick Start
 
@@ -16,11 +21,21 @@ open LeanReducers
 
 #eval
   #[(1 : Nat), 2, 3, 4]
-    |> Reducer.ofArray
+    |> ReducerSeq.ofArray
     |>.map (fun x => x + 1)
     |>.filter (fun x => x % 2 == 0)
     |>.sum
 -- 6
+```
+
+Opt into parallel reduction when the workload warrants it:
+
+```lean
+#eval
+  #[(1 : Nat), 2, 3, 4]
+    |> ReducerPar.ofArray
+    |>.reduceWithLaws (MonoidSpec.additive Nat) (fun x acc => x + acc)
+-- 10
 ```
 
 Build and run the test executable:
@@ -36,8 +51,8 @@ sequential Lean model of the same producer, transforms, and terminal.
 
 ### Native Backend And Interpreted Runs
 
-Line-oriented file producers use a small native `pread` bridge in compiled
-code. The normal path is to run through a Lake executable, as above.
+`ReducerPar` line-oriented file producers use a small native `pread` bridge in
+compiled code. The normal path is to run through a Lake executable, as above.
 
 If you run a file through Lean's interpreter, load the generated dynamic
 libraries explicitly:
@@ -60,24 +75,22 @@ Reducers are built as a three-stage pipeline:
 producer |> intermediate |> intermediate |> terminal
 ```
 
-- A producer creates the reducer and chooses the effect: `Reducer.ofArray`
-  creates a pure `Reducer α`, while `Reducer.readLines` creates a
-  `ReducerIO String`. Multi-file producers such as
-  `Reducer.readLinesFromFiles` keep the same pipeline shape while adding
-  parallelism across files.
+- A producer chooses sequential or parallel execution and the effect.
+  `ReducerSeq.ofArray` creates a pure `ReducerSeq α`;
+  `ReducerPar.readLines` creates an effectful `ReducerParIO String`.
 - Intermediate operations such as `map`, `filter`, and `flatMap` transform the
-  reducer without running it. They are fused into the terminal reduction plan instead
-  of allocating intermediate collections.
-- A terminal operation such as `reduceWithLaws`, `reduceMapWithLaws`, `reduceWithoutLaws`, `toArray`,
-  `length`, `sum`, `sumFloat`, `min?`, `max?`, `avgFloat`, or `groupBy` runs
-  the reduction. Pure reducers return a value directly; effectful reducers
-  return through their producer monad.
+  reducer without running it. They are fused into the terminal reduction plan
+  instead of allocating intermediate collections.
+- A terminal runs the reduction. `ReducerSeq.reduce` only needs a unit and local
+  step. `ReducerPar.reduceWithLaws` additionally accepts a lawful chunk combiner.
+  Convenience terminals such as `toArray`, `length`, `sum`, `min?`, `max?`,
+  `avgFloat`, and `groupBy` are available in both modes.
 
 For example:
 
 ```lean
 #[(1 : Nat), 2, 3, 4] -- source data
-  |> Reducer.ofArray  -- producer
+  |> ReducerSeq.ofArray  -- producer
   |>.map (fun x => x + 1) -- intermediate
   |>.filter (fun x => x % 2 == 0) -- intermediate
   |>.sum -- terminal
@@ -86,6 +99,11 @@ For example:
 ## Core Types
 
 ```lean
+structure ReducerSeqM (m : Type → Type) (α : Type)
+
+abbrev ReducerSeq (α : Type) := ReducerSeqM Id α
+abbrev ReducerSeqIO (α : Type) := ReducerSeqM IO α
+
 structure MonoidSpec (α : Type) where
   unit : α
   combine : α → α → α
@@ -93,84 +111,59 @@ structure MonoidSpec (α : Type) where
   left_unit : ∀ a, combine unit a = a
   right_unit : ∀ a, combine a unit = a
 
-structure ReducerM (m : Type → Type) (α : Type)
+structure ReducerParM (m : Type → Type) (α : Type)
 
-abbrev Reducer (α : Type) := ReducerM Id α
-abbrev ReducerIO (α : Type) := ReducerM IO α
+abbrev ReducerPar (α : Type) := ReducerParM Id α
+abbrev ReducerParIO (α : Type) := ReducerParM IO α
 ```
 
-`Reducer α` is for pure producers. `ReducerIO α` is for producers that must
-perform `IO`, such as reading a file.
+The `M` types carry the producer effect. Pure aliases use `Id`; file producers
+return the `IO` aliases.
 
-Internally, producers run the terminal reduction plan. Array producers use a pure
-`Task` tree. Line-oriented file producers use parallel IO tasks that read byte
-ranges and repair newline boundaries before folding lines.
+Internally, `ReducerSeq` producers run the fused step directly. `ReducerPar`
+array producers use a pure `Task` tree. Parallel line producers use IO tasks that
+read byte ranges and repair newline boundaries before folding lines.
 
 ## API Overview
 
-Producers:
+Both modes expose `ofArray`, `ofArrayM`, `readFile`, `readLines`,
+`readLinesFromFiles`, `readLinesFromFilesWithPath`, and `readChars` producers.
+Both also expose fused `map`, `filter`, and `flatMap` transforms.
+
+### Sequential Terminals
 
 ```lean
-Reducer.ofArray     : Array α → Reducer α
-Reducer.ofArrayM    : [Monad m] → m (Array α) → ReducerM m α
-Reducer.readFile    : System.FilePath → ReducerIO String
-Reducer.readLines   : System.FilePath → ReducerIO String
-Reducer.readLinesFromFiles : Array System.FilePath → ReducerIO String
-Reducer.readLinesFromFilesWithPath :
-  Array System.FilePath → ReducerIO (System.FilePath × String)
-Reducer.readChars   : System.FilePath → ReducerIO Char
+.reduce    : ρ → (α → ρ → ρ) → ReducerSeqM m α → m ρ
+.reduceMap : ρ → (ρ → ρ → ρ) → (α → ρ) → ReducerSeqM m α → m ρ
+.groupBy   : ν → (α → κ) → (α → ν → ν) → ReducerSeqM m α → m (Array (κ × ν))
 ```
 
-Transforms:
+`ReducerSeq` convenience terminals include `toArray`, `length`, `sum`,
+`sumFloat`, `min?`, `max?`, `avgFloat`, and `avg`. Sequential `.sum` only needs
+`Add α` and `OfNat α 0`; it can be used directly with `Float`.
+
+### Parallel Terminals
 
 ```lean
-.map     : ReducerM m α → (α → β) → ReducerM m β
-.filter  : ReducerM m α → (α → Bool) → ReducerM m α
-.flatMap : ReducerM m α → (α → Array β) → ReducerM m β
-```
-
-Terminals:
-
-```lean
-.reduceWithLaws    : MonoidSpec ρ → (α → ρ → ρ) → ReducerM m α → m ρ
-.reduceMapWithLaws : MonoidSpec ρ → (α → ρ) → ReducerM m α → m ρ
-.reduceWithoutLaws : ρ → (ρ → ρ → ρ) → (α → ρ → ρ) → ReducerM m α → m ρ
-.toArray         : ReducerM m α → m (Array α)
-.length         : ReducerM m α → m Nat
-.sum             : ReducerM m α → m α
-.sumFloat        : ReducerM m Float → m Float
-.min?            : [Min α] → ReducerM m α → m (Option α)
-.max?            : [Max α] → ReducerM m α → m (Option α)
-.avgFloat        : ReducerM m Float → m (Option Float)
-.avg             : ReducerM m Float → m (Option Float)
-```
-
-For pure `Reducer α`, `m` is `Id`, so terminals return the value directly.
-For `ReducerIO α`, terminals return `IO`.
-`min?`, `max?`, and floating averages return `none` for empty reducers.
-Pure reducers also expose total proof-bearing extrema:
-
-```lean
-.min : [Min α] → (xs : Reducer α) → xs.min?.isSome → α
-.max : [Max α] → (xs : Reducer α) → xs.max?.isSome → α
-```
-
-Grouping:
-
-```lean
-.groupBy :
-  [BEq κ] →
-  [Hashable κ] →
-  MonoidSpec ν →
-  (α → κ) →
-  (α → ν → ν) →
-  ReducerM m α →
+.reduceWithLaws    : MonoidSpec ρ → (α → ρ → ρ) → ReducerParM m α → m ρ
+.reduceMapWithLaws : MonoidSpec ρ → (α → ρ) → ReducerParM m α → m ρ
+.reduceWithoutLaws : ρ → (ρ → ρ → ρ) → (α → ρ → ρ) → ReducerParM m α → m ρ
+.groupBy           : MonoidSpec ν → (α → κ) → (α → ν → ν) → ReducerParM m α →
   m (Array (κ × ν))
 ```
 
-The grouped value starts at the value monoid's `unit`, then the per-key step is
-applied for each element in the group. Group output order is unspecified. For
-pure reducers, `m` is `Id`.
+`ReducerPar` exposes the same convenience terminal names. Parallel `.sum`
+requires `LawfulAddMonoid α`; practical floating-point reductions use
+`.sumFloat`.
+
+For pure reducers, `m` is `Id`, so terminals return values directly. For file
+producers, terminals return `IO`. `min?`, `max?`, and floating averages return
+`none` for empty reducers. Pure reducers in both modes also expose proof-bearing
+`.min` and `.max`.
+
+Grouped values start at the supplied unit, then the per-key step is applied for
+each element. Parallel grouping receives its unit and chunk combiner through
+`MonoidSpec`. Group output order is unspecified.
 
 ## Examples
 
@@ -179,7 +172,7 @@ pure reducers, `m` is `Id`.
 ```lean
 #eval
   #[1, 2, 3]
-    |> Reducer.ofArray
+    |> ReducerSeq.ofArray
     |>.flatMap (fun x => #[x, x * 10])
     |>.sum
 -- 66
@@ -190,12 +183,12 @@ pure reducers, `m` is `Id`.
 ```lean
 #eval
   #[3, 1, 4, 1, 5]
-    |> Reducer.ofArray
+    |> ReducerSeq.ofArray
     |>.min?
 -- some 1
 
 #eval
-  match (#[3.0, 1.0, 4.0] |> Reducer.ofArray |>.avgFloat) with
+  match (#[3.0, 1.0, 4.0] |> ReducerSeq.ofArray |>.avgFloat) with
   | some avg => avg > 2.0 && avg < 3.0
   | none => false
 -- true
@@ -206,7 +199,7 @@ pure reducers, `m` is `Id`.
 ```lean
 #eval
   #[("a", 1), ("b", 2), ("a", 3)]
-    |> Reducer.ofArray
+    |> ReducerPar.ofArray
     |>.groupBy
       (MonoidSpec.additive Nat)
       (fun row => row.1)
@@ -217,12 +210,16 @@ pure reducers, `m` is `Id`.
 
 ### File Producers
 
-`Reducer.readLines` is the large-file path: it splits the file into byte ranges,
+`ReducerSeq.readLines` reads and reduces lines sequentially without exposing
+parallel tuning knobs. Multi-file sequential producers process one file at a
+time.
+
+`ReducerPar.readLines` is the large-file path: it splits the file into byte ranges,
 reads those ranges in parallel, then adjusts each range to whole-line boundaries
 so every line is folded exactly once.
 
-`Reducer.readLinesFromFiles` and `Reducer.readLinesFromFilesWithPath` use the
-same source byte-range scheduler as `Reducer.readLines`, so skewed file sizes can
+`ReducerPar.readLinesFromFiles` and `ReducerPar.readLinesFromFilesWithPath` use the
+same source byte-range scheduler as `ReducerPar.readLines`, so skewed file sizes can
 be balanced by splitting large files into multiple ranges.
 
 Because these producers use the native backend in compiled code, interpreted
@@ -230,7 +227,7 @@ Because these producers use the native backend in compiled code, interpreted
 
 ```lean
 def countLinesByLength (path : System.FilePath) : IO (Array (Nat × Nat)) := do
-  Reducer.readLines path
+  ReducerPar.readLines path
     |>.filter (fun line => line != "")
     |>.groupBy
       (MonoidSpec.additive Nat)
@@ -244,7 +241,7 @@ produced each line:
 ```lean
 def countNonemptyLinesByFile
     (paths : Array System.FilePath) : IO (Array (System.FilePath × Nat)) := do
-  Reducer.readLinesFromFilesWithPath paths
+  ReducerPar.readLinesFromFilesWithPath paths
     |>.filter (fun row => row.2 != "")
     |>.groupBy
       (MonoidSpec.additive Nat)
@@ -254,9 +251,10 @@ def countNonemptyLinesByFile
 
 ## Lawfulness
 
-Parallel reduction can regroup chunk results. That is why lawful reductions use
+`ReducerPar` can regroup chunk results. That is why its lawful reductions use
 `MonoidSpec`: the result combiner must be associative and must have a lawful
-unit.
+unit. `ReducerSeq` does not regroup work and therefore does not require these
+proofs.
 
 Use `reduceWithoutLaws` when you have a useful `unit` and `combine` but do not want
 to provide monoid proofs. The reduction still runs in parallel, so the supplied
@@ -267,8 +265,8 @@ with a sequential fold.
 addition is not mathematically associative, so the library exposes:
 
 ```lean
-sumFloat : Reducer Float → Float
-avgFloat : Reducer Float → Option Float
+sumFloat : ReducerPar Float → Float
+avgFloat : ReducerPar Float → Option Float
 ```
 
 and the monadic equivalents for practical floating-point reductions over the
@@ -278,7 +276,7 @@ Likewise, `min?` and `max?` use the `Min` and `Max` classes. For
 parallel-stable results, those operations should behave consistently under
 regrouping.
 
-## Configuration
+## Parallel Configuration
 
 ```lean
 structure Config where
@@ -288,9 +286,10 @@ structure Config where
   diagnostics : DiagnosticsConfig := {}
 ```
 
-Use `reduceWithLawsWithConfig`, `reduceMapWithLawsWithConfig`, `reduceWithoutLawsWithConfig`, or
-`groupByWithConfig` to tune parallel splitting. For line readers, `grain` is
-interpreted as a target byte chunk size before newline-boundary repair.
+Use `ReducerPar.reduceWithLawsWithConfig`, `reduceMapWithLawsWithConfig`,
+`reduceWithoutLawsWithConfig`, or `groupByWithConfig` to tune parallel splitting.
+For parallel line readers, `grain` is interpreted as a target byte chunk size
+before newline-boundary repair.
 Diagnostics are disabled by default; line readers can emit a colorized,
 top-anchored panel with progress, OS-sampled process IO throughput, OS-sampled
 per-CPU bars, and OS-sampled process memory through a parameterized output sink.
@@ -299,15 +298,17 @@ auto-detect the CPU count.
 
 ## Design Notes
 
-- Array producers use index-based chunking. Line readers use a small native
+- `ReducerSeq` line producers read one file at a time. `ReducerPar` array
+  producers use index-based chunking, and parallel line readers use a small native
   `pread` bridge for true parallel range reads.
-- Line producers schedule over source byte ranges. Single-file reads start from
-  one range, while multi-file reads start from one range per file and may split a
-  large file into multiple ranges.
+- Parallel line producers schedule over source byte ranges. Single-file reads
+  start from one range, while multi-file reads start from one range per file and
+  may split a large file into multiple ranges.
 - File line chunks are expanded or trimmed at newline boundaries. A line that
   starts exactly at a split belongs to the right chunk, so boundary lines are not
   duplicated.
-- `readFile` and `readChars` still read the whole file before reducing.
+- Sequential line producers, `readFile`, and `readChars` read whole files before
+  reducing.
 - `map`, `filter`, and `flatMap` are fused by rewriting the terminal reduction plan;
   they do not build intermediate pipeline collections.
 - `groupBy` uses a `Std.HashMap` accumulator internally and returns an

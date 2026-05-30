@@ -8,56 +8,56 @@ import LeanReducers.Internal.GroupBy
 namespace LeanReducers
 
 /--
-A lazy, fused pipeline over input elements of type `α`.
+A lazy, fused parallel pipeline over input elements of type `α`.
 
 The producer chooses the effect `m`: in-memory arrays use `Id`, while producers
 such as file readers use `IO`. Transformations remain fused by rewriting the
 terminal step instead of allocating intermediate collections.
 -/
-structure ReducerM (m : Type → Type) (α : Type) where
+structure ReducerParM (m : Type → Type) (α : Type) where
   run : {ρ : Type} → Config → FoldSpec α ρ → m ρ
 
-abbrev Reducer (α : Type) :=
-  ReducerM Id α
+abbrev ReducerPar (α : Type) :=
+  ReducerParM Id α
 
-abbrev ReducerIO (α : Type) :=
-  ReducerM IO α
+abbrev ReducerParIO (α : Type) :=
+  ReducerParM IO α
 
-namespace Reducer
+namespace ReducerPar
 
-def ofArray (as : Array α) : Reducer α where
+def ofArray (as : Array α) : ReducerPar α where
   run := fun cfg q => (Internal.foldArrayTask cfg q as).get
 
-def ofArrayM [Monad m] (as : m (Array α)) : ReducerM m α where
+def ofArrayM [Monad m] (as : m (Array α)) : ReducerParM m α where
   run := fun cfg q => do
     let as ← as
     pure (Internal.foldArrayTask cfg q as).get
 
-def readFile (path : System.FilePath) : ReducerIO String :=
+def readFile (path : System.FilePath) : ReducerParIO String :=
   ofArrayM do
     let contents ← IO.FS.readFile path
     pure #[contents]
 
-def readLines (path : System.FilePath) : ReducerIO String :=
+def readLines (path : System.FilePath) : ReducerParIO String :=
   { run := fun cfg q => Internal.foldFileLinesIO cfg q path }
 
-def readLinesFromFiles (paths : Array System.FilePath) : ReducerIO String :=
+def readLinesFromFiles (paths : Array System.FilePath) : ReducerParIO String :=
   { run := fun cfg q => Internal.foldFilesLinesIO cfg q paths }
 
 def readLinesFromFilesWithPath (paths : Array System.FilePath) :
-    ReducerIO (System.FilePath × String) :=
+    ReducerParIO (System.FilePath × String) :=
   { run := fun cfg q => Internal.foldFilesLinesWithPathIO cfg q paths }
 
-def readChars (path : System.FilePath) : ReducerIO Char :=
+def readChars (path : System.FilePath) : ReducerParIO Char :=
   ofArrayM do
     let contents ← IO.FS.readFile path
     pure contents.toList.toArray
 
-private def mapM (xs : ReducerM m α) (f : α → β) : ReducerM m β where
+private def mapM (xs : ReducerParM m α) (f : α → β) : ReducerParM m β where
   run := fun cfg q =>
     xs.run cfg { unit := q.unit, combine := q.combine, step := fun a acc => q.step (f a) acc }
 
-private def flatMapM (xs : ReducerM m α) (f : α → Array β) : ReducerM m β where
+private def flatMapM (xs : ReducerParM m α) (f : α → Array β) : ReducerParM m β where
   run := fun cfg q =>
     xs.run cfg {
       unit := q.unit
@@ -65,7 +65,7 @@ private def flatMapM (xs : ReducerM m α) (f : α → Array β) : ReducerM m β 
       step := fun a acc => (f a).foldr q.step acc
     }
 
-private def filterM (xs : ReducerM m α) (p : α → Bool) : ReducerM m α where
+private def filterM (xs : ReducerParM m α) (p : α → Bool) : ReducerParM m α where
   run := fun cfg q =>
     let q' := ({
       unit := q.unit
@@ -75,7 +75,7 @@ private def filterM (xs : ReducerM m α) (p : α → Bool) : ReducerM m α where
     xs.run cfg q'
 
 private def reduceWithLawsWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
-    [Monad m] (xs : ReducerM m α) : m ρ := do
+    [Monad m] (xs : ReducerParM m α) : m ρ := do
   xs.run cfg (FoldSpec.ofMonoid spec step)
 
 /--
@@ -84,20 +84,20 @@ parallel-grouping-invariant results, the step should agree with the combiner:
 `step a acc = spec.combine (step a spec.unit) acc`.
 -/
 private def reduceWithLawsM (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
-    (xs : ReducerM m α) : m ρ :=
+    (xs : ReducerParM m α) : m ρ :=
   reduceWithLawsWithConfigM Config.default spec step xs
 
 private def reduceMapWithLawsWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
-    [Monad m] (xs : ReducerM m α) : m ρ :=
+    [Monad m] (xs : ReducerParM m α) : m ρ :=
   reduceWithLawsWithConfigM cfg spec (fun a acc => spec.combine (f a) acc) xs
 
 private def reduceMapWithLawsM (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
-    (xs : ReducerM m α) : m ρ :=
+    (xs : ReducerParM m α) : m ρ :=
   reduceMapWithLawsWithConfigM Config.default spec f xs
 
 private def groupByWithConfigM [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) [Monad m]
-    (xs : ReducerM m α) : m (Array (κ × ν)) := do
+    (xs : ReducerParM m α) : m (Array (κ × ν)) := do
   let groups ← xs.run cfg {
     unit := Internal.emptyGroups
     combine := Internal.mergeGroups valueSpec
@@ -106,7 +106,7 @@ private def groupByWithConfigM [BEq κ] [Hashable κ] (cfg : Config) (valueSpec 
   pure (Internal.groupsToArray groups)
 
 private def groupByM [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
-    (step : α → ν → ν) [Monad m] (xs : ReducerM m α) : m (Array (κ × ν)) :=
+    (step : α → ν → ν) [Monad m] (xs : ReducerParM m α) : m (Array (κ × ν)) :=
   groupByWithConfigM Config.default valueSpec key step xs
 
 /--
@@ -115,22 +115,22 @@ a `MonoidSpec`. The same parallel regrouping rules still apply; the library
 just does not require proofs for the supplied combiner.
 -/
 private def reduceWithoutLawsWithConfigM (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
-    (step : α → ρ → ρ) [Monad m] (xs : ReducerM m α) : m ρ := do
+    (step : α → ρ → ρ) [Monad m] (xs : ReducerParM m α) : m ρ := do
   xs.run cfg { unit := unit, combine := combine, step := step }
 
 private def reduceWithoutLawsM (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
-    [Monad m] (xs : ReducerM m α) : m ρ :=
+    [Monad m] (xs : ReducerParM m α) : m ρ :=
   reduceWithoutLawsWithConfigM Config.default unit combine step xs
 
 private def sumM [Add α] [OfNat α 0] [LawfulAddMonoid α] [Monad m]
-    (xs : ReducerM m α) : m α :=
+    (xs : ReducerParM m α) : m α :=
   reduceWithLawsM (MonoidSpec.additive α) (fun a acc => a + acc) xs
 
 /--
 Floating-point sum uses the reduce-without-laws path: IEEE floating-point addition is
 not a lawful monoid, so this terminal is separate from `.sum`.
 -/
-private def sumFloatM [Monad m] (xs : ReducerM m Float) : m Float :=
+private def sumFloatM [Monad m] (xs : ReducerParM m Float) : m Float :=
   reduceWithoutLawsM (0.0 : Float) (fun a b => a + b) (fun a acc => a + acc) xs
 
 private def reversedArraySpec (α : Type) : MonoidSpec (Array α) where
@@ -146,11 +146,11 @@ private def reversedArraySpec (α : Type) : MonoidSpec (Array α) where
     intro a
     simp
 
-private def toArrayM [Monad m] (xs : ReducerM m α) : m (Array α) := do
+private def toArrayM [Monad m] (xs : ReducerParM m α) : m (Array α) := do
   let reversed ← reduceWithLawsM (reversedArraySpec α) (fun a acc => acc.push a) xs
   pure reversed.reverse
 
-private def lengthM [Monad m] (xs : ReducerM m α) : m Nat :=
+private def lengthM [Monad m] (xs : ReducerParM m α) : m Nat :=
   reduceMapWithLawsM (MonoidSpec.additive Nat) (fun _ => (1 : Nat)) xs
 
 private def minOption [Min α] (left right : Option α) : Option α :=
@@ -165,11 +165,11 @@ private def maxOption [Max α] (left right : Option α) : Option α :=
   | other, none => other
   | some a, some b => some (max a b)
 
-private def minM [Min α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
+private def minM [Min α] [Monad m] (xs : ReducerParM m α) : m (Option α) :=
   reduceWithoutLawsM (none : Option α) (minOption (α := α))
     (fun a acc => minOption (α := α) (some a) acc) xs
 
-private def maxM [Max α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
+private def maxM [Max α] [Monad m] (xs : ReducerParM m α) : m (Option α) :=
   reduceWithoutLawsM (none : Option α) (maxOption (α := α))
     (fun a acc => maxOption (α := α) (some a) acc) xs
 
@@ -177,7 +177,7 @@ private structure FloatAverage where
   sum : Float
   count : Nat
 
-private def avgFloatM [Monad m] (xs : ReducerM m Float) : m (Option Float) := do
+private def avgFloatM [Monad m] (xs : ReducerParM m Float) : m (Option Float) := do
   let total ←
     reduceWithoutLawsM ({ sum := 0.0, count := 0 } : FloatAverage)
       (fun left right => {
@@ -194,146 +194,146 @@ private def avgFloatM [Monad m] (xs : ReducerM m Float) : m (Option Float) := do
   else
     pure (some (total.sum / Float.ofNat total.count))
 
-def map (xs : Reducer α) (f : α → β) : Reducer β :=
+def map (xs : ReducerPar α) (f : α → β) : ReducerPar β :=
   mapM xs f
 
-def flatMap (xs : Reducer α) (f : α → Array β) : Reducer β :=
+def flatMap (xs : ReducerPar α) (f : α → Array β) : ReducerPar β :=
   flatMapM xs f
 
-def filter (xs : Reducer α) (p : α → Bool) : Reducer α :=
+def filter (xs : ReducerPar α) (p : α → Bool) : ReducerPar α :=
   filterM xs p
 
 def reduceWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
-    (xs : Reducer α) : ρ :=
+    (xs : ReducerPar α) : ρ :=
   reduceWithLawsWithConfigM cfg spec step xs
 
-def reduceWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) (xs : Reducer α) : ρ :=
+def reduceWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) (xs : ReducerPar α) : ρ :=
   reduceWithLawsM spec step xs
 
 def reduceMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
-    (xs : Reducer α) : ρ :=
+    (xs : ReducerPar α) : ρ :=
   reduceMapWithLawsWithConfigM cfg spec f xs
 
-def reduceMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) (xs : Reducer α) : ρ :=
+def reduceMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) (xs : ReducerPar α) : ρ :=
   reduceMapWithLawsM spec f xs
 
 def groupByWithConfig [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
-    (key : α → κ) (step : α → ν → ν) (xs : Reducer α) : Array (κ × ν) :=
+    (key : α → κ) (step : α → ν → ν) (xs : ReducerPar α) : Array (κ × ν) :=
   groupByWithConfigM cfg valueSpec key step xs
 
 def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
-    (step : α → ν → ν) (xs : Reducer α) : Array (κ × ν) :=
+    (step : α → ν → ν) (xs : ReducerPar α) : Array (κ × ν) :=
   groupByM valueSpec key step xs
 
 def reduceWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
-    (step : α → ρ → ρ) (xs : Reducer α) : ρ :=
+    (step : α → ρ → ρ) (xs : ReducerPar α) : ρ :=
   reduceWithoutLawsWithConfigM cfg unit combine step xs
 
 def reduceWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
-    (xs : Reducer α) : ρ :=
+    (xs : ReducerPar α) : ρ :=
   reduceWithoutLawsM unit combine step xs
 
-def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] (xs : Reducer α) : α :=
+def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] (xs : ReducerPar α) : α :=
   sumM xs
 
-def sumFloat (xs : Reducer Float) : Float :=
+def sumFloat (xs : ReducerPar Float) : Float :=
   sumFloatM xs
 
-def toArray (xs : Reducer α) : Array α :=
+def toArray (xs : ReducerPar α) : Array α :=
   toArrayM xs
 
-def length (xs : Reducer α) : Nat :=
+def length (xs : ReducerPar α) : Nat :=
   lengthM xs
 
-def min? [Min α] (xs : Reducer α) : Option α :=
+def min? [Min α] (xs : ReducerPar α) : Option α :=
   minM xs
 
-def min [Min α] (xs : Reducer α) (h : xs.min?.isSome) : α :=
+def min [Min α] (xs : ReducerPar α) (h : xs.min?.isSome) : α :=
   xs.min?.get h
 
-def max? [Max α] (xs : Reducer α) : Option α :=
+def max? [Max α] (xs : ReducerPar α) : Option α :=
   maxM xs
 
-def max [Max α] (xs : Reducer α) (h : xs.max?.isSome) : α :=
+def max [Max α] (xs : ReducerPar α) (h : xs.max?.isSome) : α :=
   xs.max?.get h
 
-def avgFloat (xs : Reducer Float) : Option Float :=
+def avgFloat (xs : ReducerPar Float) : Option Float :=
   avgFloatM xs
 
-def avg (xs : Reducer Float) : Option Float :=
+def avg (xs : ReducerPar Float) : Option Float :=
   avgFloatM xs
 
-end Reducer
+end ReducerPar
 
-namespace ReducerM
+namespace ReducerParM
 
-def map (xs : ReducerM m α) (f : α → β) : ReducerM m β :=
-  Reducer.mapM xs f
+def map (xs : ReducerParM m α) (f : α → β) : ReducerParM m β :=
+  ReducerPar.mapM xs f
 
-def flatMap (xs : ReducerM m α) (f : α → Array β) : ReducerM m β :=
-  Reducer.flatMapM xs f
+def flatMap (xs : ReducerParM m α) (f : α → Array β) : ReducerParM m β :=
+  ReducerPar.flatMapM xs f
 
-def filter (xs : ReducerM m α) (p : α → Bool) : ReducerM m α :=
-  Reducer.filterM xs p
+def filter (xs : ReducerParM m α) (p : α → Bool) : ReducerParM m α :=
+  ReducerPar.filterM xs p
 
 def reduceWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
-    (xs : ReducerM m α) : m ρ :=
-  Reducer.reduceWithLawsWithConfigM cfg spec step xs
+    (xs : ReducerParM m α) : m ρ :=
+  ReducerPar.reduceWithLawsWithConfigM cfg spec step xs
 
 def reduceWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
-    (xs : ReducerM m α) : m ρ :=
-  Reducer.reduceWithLawsM spec step xs
+    (xs : ReducerParM m α) : m ρ :=
+  ReducerPar.reduceWithLawsM spec step xs
 
 def reduceMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
-    [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.reduceMapWithLawsWithConfigM cfg spec f xs
+    [Monad m] (xs : ReducerParM m α) : m ρ :=
+  ReducerPar.reduceMapWithLawsWithConfigM cfg spec f xs
 
 def reduceMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
-    (xs : ReducerM m α) : m ρ :=
-  Reducer.reduceMapWithLawsM spec f xs
+    (xs : ReducerParM m α) : m ρ :=
+  ReducerPar.reduceMapWithLawsM spec f xs
 
 def groupByWithConfig [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) [Monad m]
-    (xs : ReducerM m α) : m (Array (κ × ν)) :=
-  Reducer.groupByWithConfigM cfg valueSpec key step xs
+    (xs : ReducerParM m α) : m (Array (κ × ν)) :=
+  ReducerPar.groupByWithConfigM cfg valueSpec key step xs
 
 def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
-    (step : α → ν → ν) [Monad m] (xs : ReducerM m α) : m (Array (κ × ν)) :=
-  Reducer.groupByM valueSpec key step xs
+    (step : α → ν → ν) [Monad m] (xs : ReducerParM m α) : m (Array (κ × ν)) :=
+  ReducerPar.groupByM valueSpec key step xs
 
 def reduceWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
-    (step : α → ρ → ρ) [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.reduceWithoutLawsWithConfigM cfg unit combine step xs
+    (step : α → ρ → ρ) [Monad m] (xs : ReducerParM m α) : m ρ :=
+  ReducerPar.reduceWithoutLawsWithConfigM cfg unit combine step xs
 
 def reduceWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
-    [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.reduceWithoutLawsM unit combine step xs
+    [Monad m] (xs : ReducerParM m α) : m ρ :=
+  ReducerPar.reduceWithoutLawsM unit combine step xs
 
 def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] [Monad m]
-    (xs : ReducerM m α) : m α :=
-  Reducer.sumM xs
+    (xs : ReducerParM m α) : m α :=
+  ReducerPar.sumM xs
 
-def sumFloat [Monad m] (xs : ReducerM m Float) : m Float :=
-  Reducer.sumFloatM xs
+def sumFloat [Monad m] (xs : ReducerParM m Float) : m Float :=
+  ReducerPar.sumFloatM xs
 
-def toArray [Monad m] (xs : ReducerM m α) : m (Array α) :=
-  Reducer.toArrayM xs
+def toArray [Monad m] (xs : ReducerParM m α) : m (Array α) :=
+  ReducerPar.toArrayM xs
 
-def length [Monad m] (xs : ReducerM m α) : m Nat :=
-  Reducer.lengthM xs
+def length [Monad m] (xs : ReducerParM m α) : m Nat :=
+  ReducerPar.lengthM xs
 
-def min? [Min α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
-  Reducer.minM xs
+def min? [Min α] [Monad m] (xs : ReducerParM m α) : m (Option α) :=
+  ReducerPar.minM xs
 
-def max? [Max α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
-  Reducer.maxM xs
+def max? [Max α] [Monad m] (xs : ReducerParM m α) : m (Option α) :=
+  ReducerPar.maxM xs
 
-def avgFloat [Monad m] (xs : ReducerM m Float) : m (Option Float) :=
-  Reducer.avgFloatM xs
+def avgFloat [Monad m] (xs : ReducerParM m Float) : m (Option Float) :=
+  ReducerPar.avgFloatM xs
 
-def avg [Monad m] (xs : ReducerM m Float) : m (Option Float) :=
-  Reducer.avgFloatM xs
+def avg [Monad m] (xs : ReducerParM m Float) : m (Option Float) :=
+  ReducerPar.avgFloatM xs
 
-end ReducerM
+end ReducerParM
 
 end LeanReducers

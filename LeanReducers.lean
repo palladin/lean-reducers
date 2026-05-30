@@ -1,1 +1,2 @@
-import LeanReducers.Basic
+import LeanReducers.Seq
+import LeanReducers.Par

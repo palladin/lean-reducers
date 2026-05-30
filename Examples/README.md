@@ -7,7 +7,7 @@ or more text files. It is meant to exercise the reducer path that matters for
 large text workloads:
 
 ```lean
-Reducer.readLinesFromFiles paths
+ReducerPar.readLinesFromFiles paths
   |>.flatMap wordsOfLine
   |>.groupBy (MonoidSpec.additive Nat) id (fun _ count => count + 1)
 ```
@@ -25,7 +25,7 @@ lake exe fetch_wikitext103
 lake exe word_count --top 25 Examples/data/wikitext-103/train.csv
 ```
 
-Run a simple sequential baseline over the same input:
+Run the same fused pipeline through `ReducerSeq`:
 
 ```sh
 lake exe word_count --baseline --top 25 Examples/data/wikitext-103/train.csv

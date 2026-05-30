@@ -1,6 +1,5 @@
 import Init.Data.Array.QSort.Basic
 import Init.Data.Ord.String
-import Std.Data.HashMap.Basic
 import LeanReducers
 
 open LeanReducers
@@ -18,7 +17,7 @@ private def usage : String :=
   String.intercalate "\n" [
     "Usage: lake exe word_count [--top N] [--baseline] [--max-depth N] [--diagnostics] [--diagnostics-output console|stderr|stdout] <text-file>...",
     "",
-    "--baseline              run a simple sequential baseline implementation",
+    "--baseline              run the sequential ReducerSeq implementation",
     "--max-depth             set reducer split depth; ranges are capped at 2^N",
     "--diagnostics           show a colorized top-anchored diagnostics panel with per-CPU bars",
     "--diagnostics-output    choose where the diagnostics panel is emitted"
@@ -88,30 +87,14 @@ private def wordsOfLine (line : String) : Array String :=
   (flushToken state).words
 
 private def wordCounts (cfg : Config) (paths : Array System.FilePath) : IO (Array (String × Nat)) :=
-  Reducer.readLinesFromFiles paths
+  ReducerPar.readLinesFromFiles paths
     |>.flatMap wordsOfLine
     |>.groupByWithConfig cfg (MonoidSpec.additive Nat) id (fun _ count => count + 1)
 
-private def addWord (counts : Std.HashMap String Nat) (word : String) : Std.HashMap String Nat :=
-  counts.insert word (counts.getD word 0 + 1)
-
-private def addLineWords (counts : Std.HashMap String Nat) (line : String) : Std.HashMap String Nat :=
-  (wordsOfLine line).foldl addWord counts
-
-partial def countHandleSequential (handle : IO.FS.Handle)
-    (counts : Std.HashMap String Nat) : IO (Std.HashMap String Nat) := do
-  let line ← handle.getLine
-  if line.isEmpty then
-    pure counts
-  else
-    countHandleSequential handle (addLineWords counts line)
-
-private def wordCountsBaseline (paths : Array System.FilePath) : IO (Array (String × Nat)) := do
-  let mut counts : Std.HashMap String Nat := {}
-  for path in paths do
-    counts ← IO.FS.withFile path IO.FS.Mode.read fun handle =>
-      countHandleSequential handle counts
-  pure counts.toArray
+private def wordCountsSequential (paths : Array System.FilePath) : IO (Array (String × Nat)) :=
+  ReducerSeq.readLinesFromFiles paths
+    |>.flatMap wordsOfLine
+    |>.groupBy 0 id (fun _ count => count + 1)
 
 private def wordLess (left right : String × Nat) : Bool :=
   if left.snd == right.snd then
@@ -196,7 +179,7 @@ def main (args : List String) : IO Unit := do
     let startMs ← IO.monoMsNow
     let (implementation, counts) ←
       if opts.baseline then
-        pure ("sequential baseline", ← wordCountsBaseline opts.paths)
+        pure ("sequential reducer", ← wordCountsSequential opts.paths)
       else
         let cfg : Config := { Config.default with maxDepth := opts.maxDepth, diagnostics := opts.diagnostics }
         let name :=
