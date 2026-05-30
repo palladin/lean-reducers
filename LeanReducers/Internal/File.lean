@@ -3,6 +3,7 @@ import Init.System.IO
 import Std.Sync.Mutex
 import LeanReducers.Config
 import LeanReducers.FoldSpec
+import LeanReducers.Internal.Lines
 
 namespace LeanReducers
 namespace Internal
@@ -87,13 +88,7 @@ def lineChunkStop (path : System.FilePath) (fileSize stop : Nat) : IO Nat := do
     | none => pure fileSize
 
 def foldLineString (q : FoldSpec String ρ) (isFinal : Bool) (text : String) : ρ :=
-  let lines := text.splitOn "\n"
-  let lines :=
-    if !isFinal && text.endsWith "\n" then
-      lines.dropLast
-    else
-      lines
-  lines.foldr q.step q.unit
+  foldLinesRight text q.unit q.step (dropTrailingEmpty := !isFinal)
 
 def foldFileLineRange (q : FoldSpec String ρ) (path : System.FilePath)
     (fileSize start stop : Nat) : IO ρ := do
@@ -158,7 +153,7 @@ structure DiagnosticsRenderState where
   lastProcessSample : Option ProcessSample := none
 
 private def repeated (n : Nat) (c : Char) : String :=
-  String.ofList (List.replicate n c)
+  "".pushn c n
 
 private def barFill (width done total : Nat) : Nat :=
   if total == 0 then

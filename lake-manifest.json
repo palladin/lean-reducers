@@ -1,15 +1,16 @@
-{"version": "1.1.0",
+{"version": "1.2.0",
  "packagesDir": ".lake/packages",
  "packages":
  [{"url": "https://github.com/leanprover-community/plausible.git",
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "83e90935a17ca19ebe4b7893c7f7066e266f50d3",
+   "rev": "a456461b368b71d2accd95234832cd9c174b5437",
    "name": "plausible",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "v4.29.0",
+   "inputRev": "v4.30.0",
    "inherited": false,
    "configFile": "lakefile.toml"}],
  "name": "lean_reducers",
- "lakeDir": ".lake"}
+ "lakeDir": ".lake",
+ "fixedToolchain": false}

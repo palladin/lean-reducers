@@ -81,10 +81,10 @@ private def wordLess (left right : String × Nat) : Bool :=
     right.snd < left.snd
 
 private def spaces (n : Nat) : String :=
-  String.ofList (List.replicate n ' ')
+  "".pushn ' ' n
 
 private def dashes (n : Nat) : String :=
-  String.ofList (List.replicate n '-')
+  "".pushn '-' n
 
 private def padLeft (width : Nat) (s : String) : String :=
   spaces (width - s.length) ++ s

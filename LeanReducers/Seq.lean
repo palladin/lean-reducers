@@ -1,6 +1,8 @@
 import Init.Data.Float
+import Init.Data.String.Iterate
 import Init.System.IO
 import LeanReducers.Internal.GroupBy
+import LeanReducers.Internal.Lines
 
 namespace LeanReducers
 
@@ -53,7 +55,7 @@ private def reduceLinesFromFiles (paths : List System.FilePath) (unit : ρ)
   | path :: rest =>
       let acc ← reduceLinesFromFiles rest unit step
       let contents ← IO.FS.readFile path
-      pure ((contents.splitOn "\n").foldr step acc)
+      pure (Internal.foldLinesRight contents acc step)
 
 private def reduceLinesFromFilesWithPath (paths : List System.FilePath) (unit : ρ)
     (step : System.FilePath × String → ρ → ρ) : IO ρ := do
@@ -62,7 +64,7 @@ private def reduceLinesFromFilesWithPath (paths : List System.FilePath) (unit : 
   | path :: rest =>
       let acc ← reduceLinesFromFilesWithPath rest unit step
       let contents ← IO.FS.readFile path
-      pure ((contents.splitOn "\n").foldr (fun line acc => step (path, line) acc) acc)
+      pure (Internal.foldLinesRight contents acc (fun line acc => step (path, line) acc))
 
 def readLines (path : System.FilePath) : ReducerSeqIO String where
   run := fun unit step => reduceLinesFromFiles [path] unit step
@@ -77,7 +79,7 @@ def readLinesFromFilesWithPath (paths : Array System.FilePath) :
 def readChars (path : System.FilePath) : ReducerSeqIO Char where
   run := fun unit step => do
     let contents ← IO.FS.readFile path
-    pure (contents.toList.foldr step unit)
+    pure (contents.toSlice.foldr step unit)
 
 private def mapM (xs : ReducerSeqM m α) (f : α → β) : ReducerSeqM m β where
   run := fun unit step =>

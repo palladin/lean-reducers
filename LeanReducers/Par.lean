@@ -1,5 +1,6 @@
 import Init.Data.Float
 import Init.Data.Array.Lemmas
+import Init.Data.String.Iterate
 import Init.System.IO
 import LeanReducers.Internal.Array
 import LeanReducers.Internal.File
@@ -52,7 +53,7 @@ def readLinesFromFilesWithPath (paths : Array System.FilePath) :
 def readChars (path : System.FilePath) : ReducerParIO Char :=
   ofArrayM do
     let contents ← IO.FS.readFile path
-    pure contents.toList.toArray
+    pure contents.toSlice.chars.toArray
 
 private def mapM (xs : ReducerParM m α) (f : α → β) : ReducerParM m β where
   run := fun cfg q =>

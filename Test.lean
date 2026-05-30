@@ -740,7 +740,7 @@ def runFileProperties : IO Unit := do
     checkFileCase idx raw
   ok "file producer generated cases" s!"{fileCases} cases"
 
-  let longLine := String.ofList (List.replicate 5000 'x')
+  let longLine := "".pushn 'x' 5000
   let boundaryPath : System.FilePath := "/private/tmp/lean_reducers_prop_boundary.txt"
   let boundaryContents := s!"first\n{longLine}\n\nlast\n"
   IO.FS.writeFile boundaryPath boundaryContents
@@ -753,7 +753,7 @@ def runFileProperties : IO Unit := do
   let skewSmallPath : System.FilePath := "/private/tmp/lean_reducers_prop_skew_small.txt"
   let skewLargePath : System.FilePath := "/private/tmp/lean_reducers_prop_skew_large.txt"
   let skewSmallContents := "small\n"
-  let skewLongLine := String.ofList (List.replicate 5000 's')
+  let skewLongLine := "".pushn 's' 5000
   let skewLargeContents := s!"large-first\n{skewLongLine}\nlarge-last\n"
   IO.FS.writeFile skewSmallPath skewSmallContents
   IO.FS.writeFile skewLargePath skewLargeContents
