@@ -66,9 +66,9 @@ producer |> intermediate |> intermediate |> terminal
   `Reducer.readLinesFromFiles` keep the same pipeline shape while adding
   parallelism across files.
 - Intermediate operations such as `map`, `filter`, and `flatMap` transform the
-  reducer without running it. They are fused into the terminal fold plan instead
+  reducer without running it. They are fused into the terminal reduction plan instead
   of allocating intermediate collections.
-- A terminal operation such as `foldWithLaws`, `foldMapWithLaws`, `foldWithoutLaws`, `toArray`,
+- A terminal operation such as `reduceWithLaws`, `reduceMapWithLaws`, `reduceWithoutLaws`, `toArray`,
   `length`, `sum`, `sumFloat`, `min?`, `max?`, `avgFloat`, or `groupBy` runs
   the reduction. Pure reducers return a value directly; effectful reducers
   return through their producer monad.
@@ -102,7 +102,7 @@ abbrev ReducerIO (α : Type) := ReducerM IO α
 `Reducer α` is for pure producers. `ReducerIO α` is for producers that must
 perform `IO`, such as reading a file.
 
-Internally, producers run the terminal fold plan. Array producers use a pure
+Internally, producers run the terminal reduction plan. Array producers use a pure
 `Task` tree. Line-oriented file producers use parallel IO tasks that read byte
 ranges and repair newline boundaries before folding lines.
 
@@ -132,9 +132,9 @@ Transforms:
 Terminals:
 
 ```lean
-.foldWithLaws    : MonoidSpec ρ → (α → ρ → ρ) → ReducerM m α → m ρ
-.foldMapWithLaws : MonoidSpec ρ → (α → ρ) → ReducerM m α → m ρ
-.foldWithoutLaws : ρ → (ρ → ρ → ρ) → (α → ρ → ρ) → ReducerM m α → m ρ
+.reduceWithLaws    : MonoidSpec ρ → (α → ρ → ρ) → ReducerM m α → m ρ
+.reduceMapWithLaws : MonoidSpec ρ → (α → ρ) → ReducerM m α → m ρ
+.reduceWithoutLaws : ρ → (ρ → ρ → ρ) → (α → ρ → ρ) → ReducerM m α → m ρ
 .toArray         : ReducerM m α → m (Array α)
 .length         : ReducerM m α → m Nat
 .sum             : ReducerM m α → m α
@@ -258,8 +258,8 @@ Parallel reduction can regroup chunk results. That is why lawful reductions use
 `MonoidSpec`: the result combiner must be associative and must have a lawful
 unit.
 
-Use `foldWithoutLaws` when you have a useful `unit` and `combine` but do not want
-to provide monoid proofs. The fold still runs in parallel, so the supplied
+Use `reduceWithoutLaws` when you have a useful `unit` and `combine` but do not want
+to provide monoid proofs. The reduction still runs in parallel, so the supplied
 combiner should be stable under regrouping if you need deterministic equality
 with a sequential fold.
 
@@ -272,7 +272,7 @@ avgFloat : Reducer Float → Option Float
 ```
 
 and the monadic equivalents for practical floating-point reductions over the
-without-laws fold path.
+without-laws reduction path.
 
 Likewise, `min?` and `max?` use the `Min` and `Max` classes. For
 parallel-stable results, those operations should behave consistently under
@@ -288,7 +288,7 @@ structure Config where
   diagnostics : DiagnosticsConfig := {}
 ```
 
-Use `foldWithLawsWithConfig`, `foldMapWithLawsWithConfig`, `foldWithoutLawsWithConfig`, or
+Use `reduceWithLawsWithConfig`, `reduceMapWithLawsWithConfig`, `reduceWithoutLawsWithConfig`, or
 `groupByWithConfig` to tune parallel splitting. For line readers, `grain` is
 interpreted as a target byte chunk size before newline-boundary repair.
 Diagnostics are disabled by default; line readers can emit a colorized,
@@ -308,7 +308,7 @@ auto-detect the CPU count.
   starts exactly at a split belongs to the right chunk, so boundary lines are not
   duplicated.
 - `readFile` and `readChars` still read the whole file before reducing.
-- `map`, `filter`, and `flatMap` are fused by rewriting the terminal fold plan;
+- `map`, `filter`, and `flatMap` are fused by rewriting the terminal reduction plan;
   they do not build intermediate pipeline collections.
 - `groupBy` uses a `Std.HashMap` accumulator internally and returns an
   `Array (key × value)` at the API boundary.

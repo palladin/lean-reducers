@@ -112,25 +112,25 @@ def seqFloatAvg? (xs : Array Float) : Option Float :=
     some (seqFloatSum xs / Float.ofNat xs.size)
 
 def collectReducerWithConfig (cfg : Config) (xs : Reducer α) : List α :=
-  Reducer.foldWithoutLawsWithConfig cfg ([] : List α)
+  Reducer.reduceWithoutLawsWithConfig cfg ([] : List α)
     (fun left right => left ++ right)
     (fun x acc => x :: acc)
     xs
 
 def collectReducer (xs : Reducer α) : List α :=
-  Reducer.foldWithoutLaws ([] : List α)
+  Reducer.reduceWithoutLaws ([] : List α)
     (fun left right => left ++ right)
     (fun x acc => x :: acc)
     xs
 
 def collectReducerIOWithConfig (cfg : Config) (xs : ReducerIO α) : IO (List α) :=
-  ReducerM.foldWithoutLawsWithConfig cfg ([] : List α)
+  ReducerM.reduceWithoutLawsWithConfig cfg ([] : List α)
     (fun left right => left ++ right)
     (fun x acc => x :: acc)
     xs
 
 def collectReducerIO (xs : ReducerIO α) : IO (List α) :=
-  ReducerM.foldWithoutLaws ([] : List α)
+  ReducerM.reduceWithoutLaws ([] : List α)
     (fun left right => left ++ right)
     (fun x acc => x :: acc)
     xs
@@ -168,41 +168,41 @@ def propMapFilterFlatMapMatchesSeq (raw : Array Nat) (grain depth : Nat) : Bool 
       |> collectReducerWithConfig cfg
   actual == (seqPipelineNat raw).toList
 
-def propFoldWithLawsWithConfigMatchesSeq (raw : Array Nat) (grain depth : Nat) : Bool :=
+def propReduceWithLawsWithConfigMatchesSeq (raw : Array Nat) (grain depth : Nat) : Bool :=
   let cfg := cfgOf grain depth
   let data := smallNats raw
   let actual :=
     data
       |> Reducer.ofArray
-      |> Reducer.foldWithLawsWithConfig cfg (MonoidSpec.additive Nat) (fun x acc => x + acc)
+      |> Reducer.reduceWithLawsWithConfig cfg (MonoidSpec.additive Nat) (fun x acc => x + acc)
   actual == seqNatSum data
 
-def propFoldWithLawsMatchesSeq (raw : Array Nat) : Bool :=
+def propReduceWithLawsMatchesSeq (raw : Array Nat) : Bool :=
   let data := smallNats raw
   let actual :=
     data
       |> Reducer.ofArray
-      |> Reducer.foldWithLaws (MonoidSpec.additive Nat) (fun x acc => x + acc)
+      |> Reducer.reduceWithLaws (MonoidSpec.additive Nat) (fun x acc => x + acc)
   actual == seqNatSum data
 
-def propFoldMapWithLawsWithConfigMatchesSeq (raw : Array Nat) (grain depth : Nat) : Bool :=
+def propReduceMapWithLawsWithConfigMatchesSeq (raw : Array Nat) (grain depth : Nat) : Bool :=
   let cfg := cfgOf grain depth
   let data := smallNats raw
   let f := fun x => x * 3 + 1
   let actual :=
     data
       |> Reducer.ofArray
-      |> Reducer.foldMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) f
+      |> Reducer.reduceMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) f
   let expected := data.foldl (fun acc x => acc + f x) 0
   actual == expected
 
-def propFoldMapWithLawsMatchesSeq (raw : Array Nat) : Bool :=
+def propReduceMapWithLawsMatchesSeq (raw : Array Nat) : Bool :=
   let data := smallNats raw
   let f := fun x => x * 3 + 1
   let actual :=
     data
       |> Reducer.ofArray
-      |> Reducer.foldMapWithLaws (MonoidSpec.additive Nat) f
+      |> Reducer.reduceMapWithLaws (MonoidSpec.additive Nat) f
   let expected := data.foldl (fun acc x => acc + f x) 0
   actual == expected
 
@@ -229,7 +229,7 @@ def propGroupByMatchesSeq (raw : Array Nat) : Bool :=
       |> groupTotals
   actual == seqGroupTotals data
 
-def propFoldWithoutLawsMatchesSeq (raw : Array Nat) : Bool :=
+def propReduceWithoutLawsMatchesSeq (raw : Array Nat) : Bool :=
   let data := smallNats raw
   collectReducer (Reducer.ofArray data) == data.toList
 
@@ -303,16 +303,16 @@ def propOfArrayMIdMatchesSeq (raw : Array Nat) (grain depth : Nat) : Bool :=
 
 def runPureArrayProperties : IO Unit := do
   reportSection "Pure Reducer properties"
-  checkProp "ofArray/map/filter/flatMap/foldWithoutLawsWithConfig"
+  checkProp "ofArray/map/filter/flatMap/reduceWithoutLawsWithConfig"
     (pureArrayConfigProperty propMapFilterFlatMapMatchesSeq)
-  checkProp "foldWithLawsWithConfig"
-    (pureArrayConfigProperty propFoldWithLawsWithConfigMatchesSeq)
-  checkProp "foldWithLaws"
-    (pureArrayProperty propFoldWithLawsMatchesSeq)
-  checkProp "foldMapWithLawsWithConfig"
-    (pureArrayConfigProperty propFoldMapWithLawsWithConfigMatchesSeq)
-  checkProp "foldMapWithLaws"
-    (pureArrayProperty propFoldMapWithLawsMatchesSeq)
+  checkProp "reduceWithLawsWithConfig"
+    (pureArrayConfigProperty propReduceWithLawsWithConfigMatchesSeq)
+  checkProp "reduceWithLaws"
+    (pureArrayProperty propReduceWithLawsMatchesSeq)
+  checkProp "reduceMapWithLawsWithConfig"
+    (pureArrayConfigProperty propReduceMapWithLawsWithConfigMatchesSeq)
+  checkProp "reduceMapWithLaws"
+    (pureArrayProperty propReduceMapWithLawsMatchesSeq)
   checkProp "groupByWithConfig"
     (pureArrayConfigProperty propGroupByWithConfigMatchesSeq)
   checkProp "groupBy"
@@ -329,8 +329,8 @@ def runPureArrayProperties : IO Unit := do
   assertEq "groupBy high-cardinality keys"
     ((List.range 500).map (fun k => k + 1)) distinctTotals
   ok "groupBy high-cardinality keys" "500 distinct keys"
-  checkProp "foldWithoutLaws"
-    (pureArrayProperty propFoldWithoutLawsMatchesSeq)
+  checkProp "reduceWithoutLaws"
+    (pureArrayProperty propReduceWithoutLawsMatchesSeq)
   checkProp "sum Nat"
     (pureArrayProperty propSumNatMatchesSeq)
   checkProp "sum Int"
@@ -372,33 +372,33 @@ def checkEffectCase (idx : Nat) (raw : EffectCase) : IO Unit := do
       |>.map mapNat
       |>.filter keepNat
       |>.flatMap expandNat
-      |>.foldWithoutLawsWithConfig cfg ([] : List Nat)
+      |>.reduceWithoutLawsWithConfig cfg ([] : List Nat)
         (fun left right => left ++ right)
         (fun x acc => x :: acc)
-  assertEq s!"{label}: ReducerM map/filter/flatMap/foldWithoutLawsWithConfig"
+  assertEq s!"{label}: ReducerM map/filter/flatMap/reduceWithoutLawsWithConfig"
     (seqPipelineNat xs).toList actualPipeline
 
-  let actualFoldWithLaws ←
+  let actualReduceWithLaws ←
     source
-      |>.foldWithLawsWithConfig cfg (MonoidSpec.additive Nat) (fun x acc => x + acc)
-  assertEq s!"{label}: ReducerM foldWithLawsWithConfig" (seqNatSum data) actualFoldWithLaws
+      |>.reduceWithLawsWithConfig cfg (MonoidSpec.additive Nat) (fun x acc => x + acc)
+  assertEq s!"{label}: ReducerM reduceWithLawsWithConfig" (seqNatSum data) actualReduceWithLaws
 
-  let actualFoldWithLawsDefault ←
+  let actualReduceWithLawsDefault ←
     source
-      |>.foldWithLaws (MonoidSpec.additive Nat) (fun x acc => x + acc)
-  assertEq s!"{label}: ReducerM foldWithLaws" (seqNatSum data) actualFoldWithLawsDefault
+      |>.reduceWithLaws (MonoidSpec.additive Nat) (fun x acc => x + acc)
+  assertEq s!"{label}: ReducerM reduceWithLaws" (seqNatSum data) actualReduceWithLawsDefault
 
   let f := fun x => x * 3 + 1
-  let expectedFoldMapWithLaws := data.foldl (fun acc x => acc + f x) 0
-  let actualFoldMapWithLawsWithConfig ←
+  let expectedReduceMapWithLaws := data.foldl (fun acc x => acc + f x) 0
+  let actualReduceMapWithLawsWithConfig ←
     source
-      |>.foldMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) f
-  assertEq s!"{label}: ReducerM foldMapWithLawsWithConfig" expectedFoldMapWithLaws actualFoldMapWithLawsWithConfig
+      |>.reduceMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) f
+  assertEq s!"{label}: ReducerM reduceMapWithLawsWithConfig" expectedReduceMapWithLaws actualReduceMapWithLawsWithConfig
 
-  let actualFoldMapWithLaws ←
+  let actualReduceMapWithLaws ←
     source
-      |>.foldMapWithLaws (MonoidSpec.additive Nat) f
-  assertEq s!"{label}: ReducerM foldMapWithLaws" expectedFoldMapWithLaws actualFoldMapWithLaws
+      |>.reduceMapWithLaws (MonoidSpec.additive Nat) f
+  assertEq s!"{label}: ReducerM reduceMapWithLaws" expectedReduceMapWithLaws actualReduceMapWithLaws
 
   let actualGroupByWithConfig ←
     source
@@ -417,7 +417,7 @@ def checkEffectCase (idx : Nat) (raw : EffectCase) : IO Unit := do
     (seqGroupTotals data) (groupTotals actualGroupBy)
 
   let actualWithoutLaws ← collectReducerIO source
-  assertEq s!"{label}: ReducerM foldWithoutLaws" data.toList actualWithoutLaws
+  assertEq s!"{label}: ReducerM reduceWithoutLaws" data.toList actualWithoutLaws
 
   let actualArray ← source.toArray
   assertEq s!"{label}: ReducerM toArray" data actualArray
@@ -447,7 +447,7 @@ def checkEffectCase (idx : Nat) (raw : EffectCase) : IO Unit := do
 def runEffectProperties : IO Unit := do
   reportSection "Effectful ReducerM properties"
   IO.println s!"  generated cases: {effectCases}"
-  IO.println "  APIs: ofArrayM IO, map, filter, flatMap, foldWithLaws*, foldMapWithLaws*, groupBy*, foldWithoutLaws, sum, sumFloat, toArray, length, min?, max?, avgFloat"
+  IO.println "  APIs: ofArrayM IO, map, filter, flatMap, reduceWithLaws*, reduceMapWithLaws*, groupBy*, reduceWithoutLaws, sum, sumFloat, toArray, length, min?, max?, avgFloat"
   for idx in List.range effectCases do
     let raw ← sample EffectCase (20 + idx % 80)
     checkEffectCase idx raw
@@ -498,8 +498,8 @@ def checkFileCase (idx : Nat) (raw : FileCase) : IO Unit := do
 
   let readFileLength ←
     Reducer.readFile leftPath
-      |>.foldMapWithLaws (MonoidSpec.additive Nat) String.length
-  assertEq s!"{label}: readFile/foldMapWithLaws"
+      |>.reduceMapWithLaws (MonoidSpec.additive Nat) String.length
+  assertEq s!"{label}: readFile/reduceMapWithLaws"
     leftContents.length readFileLength
 
   let readChars ←
@@ -510,12 +510,12 @@ def checkFileCase (idx : Nat) (raw : FileCase) : IO Unit := do
   let readLines ←
     Reducer.readLines leftPath
       |> collectReducerIOWithConfig cfg
-  assertEq s!"{label}: readLines/foldWithoutLawsWithConfig" leftLines readLines
+  assertEq s!"{label}: readLines/reduceWithoutLawsWithConfig" leftLines readLines
 
   let readLinesDefault ←
     Reducer.readLines leftPath
       |> collectReducerIO
-  assertEq s!"{label}: readLines/foldWithoutLaws" leftLines readLinesDefault
+  assertEq s!"{label}: readLines/reduceWithoutLaws" leftLines readLinesDefault
 
   let readLinesArray ←
     Reducer.readLines leftPath
@@ -536,25 +536,25 @@ def checkFileCase (idx : Nat) (raw : FileCase) : IO Unit := do
   assertEq s!"{label}: file map/filter/flatMap/sum"
     (seqNatSum (seqLinePipeline leftLines)) pipelineSum
 
-  let foldLength ←
+  let reduceLength ←
     Reducer.readLines leftPath
-      |>.foldWithLawsWithConfig cfg (MonoidSpec.additive Nat)
+      |>.reduceWithLawsWithConfig cfg (MonoidSpec.additive Nat)
         (fun line acc => line.length + acc)
-  assertEq s!"{label}: file foldWithLawsWithConfig"
-    (leftLines.foldl (fun acc line => acc + line.length) 0) foldLength
+  assertEq s!"{label}: file reduceWithLawsWithConfig"
+    (leftLines.foldl (fun acc line => acc + line.length) 0) reduceLength
 
-  let foldLengthDefault ←
+  let reduceLengthDefault ←
     Reducer.readLines leftPath
-      |>.foldWithLaws (MonoidSpec.additive Nat)
+      |>.reduceWithLaws (MonoidSpec.additive Nat)
         (fun line acc => line.length + acc)
-  assertEq s!"{label}: file foldWithLaws"
-    (leftLines.foldl (fun acc line => acc + line.length) 0) foldLengthDefault
+  assertEq s!"{label}: file reduceWithLaws"
+    (leftLines.foldl (fun acc line => acc + line.length) 0) reduceLengthDefault
 
-  let foldMapLengthWithConfig ←
+  let reduceMapLengthWithConfig ←
     Reducer.readLines leftPath
-      |>.foldMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) String.length
-  assertEq s!"{label}: file foldMapWithLawsWithConfig"
-    (leftLines.foldl (fun acc line => acc + line.length) 0) foldMapLengthWithConfig
+      |>.reduceMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) String.length
+  assertEq s!"{label}: file reduceMapWithLawsWithConfig"
+    (leftLines.foldl (fun acc line => acc + line.length) 0) reduceMapLengthWithConfig
 
   let groupsWithConfig ←
     Reducer.readLines leftPath

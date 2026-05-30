@@ -74,7 +74,7 @@ private def filterM (xs : ReducerM m α) (p : α → Bool) : ReducerM m α where
     } : FoldSpec α _)
     xs.run cfg q'
 
-private def foldWithLawsWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
+private def reduceWithLawsWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ := do
   xs.run cfg (FoldSpec.ofMonoid spec step)
 
@@ -83,17 +83,17 @@ Reduce with a proven monoid combiner and caller-provided local step. For
 parallel-grouping-invariant results, the step should agree with the combiner:
 `step a acc = spec.combine (step a spec.unit) acc`.
 -/
-private def foldWithLawsM (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
+private def reduceWithLawsM (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  foldWithLawsWithConfigM Config.default spec step xs
+  reduceWithLawsWithConfigM Config.default spec step xs
 
-private def foldMapWithLawsWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
+private def reduceMapWithLawsWithConfigM (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ :=
-  foldWithLawsWithConfigM cfg spec (fun a acc => spec.combine (f a) acc) xs
+  reduceWithLawsWithConfigM cfg spec (fun a acc => spec.combine (f a) acc) xs
 
-private def foldMapWithLawsM (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
+private def reduceMapWithLawsM (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  foldMapWithLawsWithConfigM Config.default spec f xs
+  reduceMapWithLawsWithConfigM Config.default spec f xs
 
 private def groupByWithConfigM [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) [Monad m]
@@ -110,28 +110,28 @@ private def groupByM [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : �
   groupByWithConfigM Config.default valueSpec key step xs
 
 /--
-Fold without law proofs for operations where the caller does not want to provide
+Reduce without law proofs for operations where the caller does not want to provide
 a `MonoidSpec`. The same parallel regrouping rules still apply; the library
 just does not require proofs for the supplied combiner.
 -/
-private def foldWithoutLawsWithConfigM (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
+private def reduceWithoutLawsWithConfigM (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
     (step : α → ρ → ρ) [Monad m] (xs : ReducerM m α) : m ρ := do
   xs.run cfg { unit := unit, combine := combine, step := step }
 
-private def foldWithoutLawsM (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
+private def reduceWithoutLawsM (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ :=
-  foldWithoutLawsWithConfigM Config.default unit combine step xs
+  reduceWithoutLawsWithConfigM Config.default unit combine step xs
 
 private def sumM [Add α] [OfNat α 0] [LawfulAddMonoid α] [Monad m]
     (xs : ReducerM m α) : m α :=
-  foldWithLawsM (MonoidSpec.additive α) (fun a acc => a + acc) xs
+  reduceWithLawsM (MonoidSpec.additive α) (fun a acc => a + acc) xs
 
 /--
-Floating-point sum uses the fold-without-laws path: IEEE floating-point addition is
+Floating-point sum uses the reduce-without-laws path: IEEE floating-point addition is
 not a lawful monoid, so this terminal is separate from `.sum`.
 -/
 private def sumFloatM [Monad m] (xs : ReducerM m Float) : m Float :=
-  foldWithoutLawsM (0.0 : Float) (fun a b => a + b) (fun a acc => a + acc) xs
+  reduceWithoutLawsM (0.0 : Float) (fun a b => a + b) (fun a acc => a + acc) xs
 
 private def reversedArraySpec (α : Type) : MonoidSpec (Array α) where
   unit := #[]
@@ -147,11 +147,11 @@ private def reversedArraySpec (α : Type) : MonoidSpec (Array α) where
     simp
 
 private def toArrayM [Monad m] (xs : ReducerM m α) : m (Array α) := do
-  let reversed ← foldWithLawsM (reversedArraySpec α) (fun a acc => acc.push a) xs
+  let reversed ← reduceWithLawsM (reversedArraySpec α) (fun a acc => acc.push a) xs
   pure reversed.reverse
 
 private def lengthM [Monad m] (xs : ReducerM m α) : m Nat :=
-  foldMapWithLawsM (MonoidSpec.additive Nat) (fun _ => (1 : Nat)) xs
+  reduceMapWithLawsM (MonoidSpec.additive Nat) (fun _ => (1 : Nat)) xs
 
 private def minOption [Min α] (left right : Option α) : Option α :=
   match left, right with
@@ -166,11 +166,11 @@ private def maxOption [Max α] (left right : Option α) : Option α :=
   | some a, some b => some (max a b)
 
 private def minM [Min α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
-  foldWithoutLawsM (none : Option α) (minOption (α := α))
+  reduceWithoutLawsM (none : Option α) (minOption (α := α))
     (fun a acc => minOption (α := α) (some a) acc) xs
 
 private def maxM [Max α] [Monad m] (xs : ReducerM m α) : m (Option α) :=
-  foldWithoutLawsM (none : Option α) (maxOption (α := α))
+  reduceWithoutLawsM (none : Option α) (maxOption (α := α))
     (fun a acc => maxOption (α := α) (some a) acc) xs
 
 private structure FloatAverage where
@@ -179,7 +179,7 @@ private structure FloatAverage where
 
 private def avgFloatM [Monad m] (xs : ReducerM m Float) : m (Option Float) := do
   let total ←
-    foldWithoutLawsM ({ sum := 0.0, count := 0 } : FloatAverage)
+    reduceWithoutLawsM ({ sum := 0.0, count := 0 } : FloatAverage)
       (fun left right => {
         sum := left.sum + right.sum
         count := left.count + right.count
@@ -203,19 +203,19 @@ def flatMap (xs : Reducer α) (f : α → Array β) : Reducer β :=
 def filter (xs : Reducer α) (p : α → Bool) : Reducer α :=
   filterM xs p
 
-def foldWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
+def reduceWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
     (xs : Reducer α) : ρ :=
-  foldWithLawsWithConfigM cfg spec step xs
+  reduceWithLawsWithConfigM cfg spec step xs
 
-def foldWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) (xs : Reducer α) : ρ :=
-  foldWithLawsM spec step xs
+def reduceWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) (xs : Reducer α) : ρ :=
+  reduceWithLawsM spec step xs
 
-def foldMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
+def reduceMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
     (xs : Reducer α) : ρ :=
-  foldMapWithLawsWithConfigM cfg spec f xs
+  reduceMapWithLawsWithConfigM cfg spec f xs
 
-def foldMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) (xs : Reducer α) : ρ :=
-  foldMapWithLawsM spec f xs
+def reduceMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) (xs : Reducer α) : ρ :=
+  reduceMapWithLawsM spec f xs
 
 def groupByWithConfig [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) (xs : Reducer α) : Array (κ × ν) :=
@@ -225,13 +225,13 @@ def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
     (step : α → ν → ν) (xs : Reducer α) : Array (κ × ν) :=
   groupByM valueSpec key step xs
 
-def foldWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
+def reduceWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
     (step : α → ρ → ρ) (xs : Reducer α) : ρ :=
-  foldWithoutLawsWithConfigM cfg unit combine step xs
+  reduceWithoutLawsWithConfigM cfg unit combine step xs
 
-def foldWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
+def reduceWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
     (xs : Reducer α) : ρ :=
-  foldWithoutLawsM unit combine step xs
+  reduceWithoutLawsM unit combine step xs
 
 def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] (xs : Reducer α) : α :=
   sumM xs
@@ -276,21 +276,21 @@ def flatMap (xs : ReducerM m α) (f : α → Array β) : ReducerM m β :=
 def filter (xs : ReducerM m α) (p : α → Bool) : ReducerM m α :=
   Reducer.filterM xs p
 
-def foldWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
+def reduceWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  Reducer.foldWithLawsWithConfigM cfg spec step xs
+  Reducer.reduceWithLawsWithConfigM cfg spec step xs
 
-def foldWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
+def reduceWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  Reducer.foldWithLawsM spec step xs
+  Reducer.reduceWithLawsM spec step xs
 
-def foldMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
+def reduceMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.foldMapWithLawsWithConfigM cfg spec f xs
+  Reducer.reduceMapWithLawsWithConfigM cfg spec f xs
 
-def foldMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
+def reduceMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
     (xs : ReducerM m α) : m ρ :=
-  Reducer.foldMapWithLawsM spec f xs
+  Reducer.reduceMapWithLawsM spec f xs
 
 def groupByWithConfig [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
     (key : α → κ) (step : α → ν → ν) [Monad m]
@@ -301,13 +301,13 @@ def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
     (step : α → ν → ν) [Monad m] (xs : ReducerM m α) : m (Array (κ × ν)) :=
   Reducer.groupByM valueSpec key step xs
 
-def foldWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
+def reduceWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
     (step : α → ρ → ρ) [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.foldWithoutLawsWithConfigM cfg unit combine step xs
+  Reducer.reduceWithoutLawsWithConfigM cfg unit combine step xs
 
-def foldWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
+def reduceWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
     [Monad m] (xs : ReducerM m α) : m ρ :=
-  Reducer.foldWithoutLawsM unit combine step xs
+  Reducer.reduceWithoutLawsM unit combine step xs
 
 def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] [Monad m]
     (xs : ReducerM m α) : m α :=
