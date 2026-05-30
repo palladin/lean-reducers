@@ -1,35 +1,26 @@
 import Init.Data.Array.QSort.Basic
 import Init.Data.Ord.String
-import LeanReducers
+import Examples.ReducerArgs
 
 open LeanReducers
+open Examples
 
 namespace Examples.WordCount
 
 structure Options where
   top : Nat := 25
   paths : Array System.FilePath := #[]
-  diagnostics : DiagnosticsConfig := {}
-  baseline : Bool := false
-  maxDepth : Nat := Config.default.maxDepth
+  reducer : ReducerArgs := {}
 
 private def usage : String :=
   String.intercalate "\n" [
-    "Usage: lake exe word_count [--top N] [--baseline] [--max-depth N] [--diagnostics] [--diagnostics-output console|stderr|stdout] <text-file>...",
+    "Usage: lake exe word_count [options] <text-file>...",
     "",
-    "--baseline              run the sequential ReducerSeq implementation",
-    "--max-depth             set reducer split depth; ranges are capped at 2^N",
-    "--diagnostics           show a colorized top-anchored diagnostics panel with per-CPU bars",
-    "--diagnostics-output    choose where the diagnostics panel is emitted"
+    "--top N                 show the N most common words",
+    ReducerArgs.usage
   ]
 
-private def withDiagnostics (opts : Options) : Options :=
-  { opts with diagnostics := { opts.diagnostics with enabled := true, sampleSystem := true } }
-
-private def withDiagnosticsOutput (opts : Options) (output : DiagnosticsOutput) : Options :=
-  { opts with diagnostics := { opts.diagnostics with output := output } }
-
-private def parseArgs : List String -> Options -> Except String Options
+private partial def parseArgs : List String -> Options -> Except String Options
   | [], opts => .ok opts
   | "--top" :: n :: rest, opts =>
       match n.toNat? with
@@ -37,33 +28,17 @@ private def parseArgs : List String -> Options -> Except String Options
       | none => .error s!"--top expects a natural number, got {n}"
   | "--top" :: [], _ =>
       .error "--top expects a natural number"
-  | "--max-depth" :: n :: rest, opts =>
-      match n.toNat? with
-      | some maxDepth => parseArgs rest { opts with maxDepth := maxDepth }
-      | none => .error s!"--max-depth expects a natural number, got {n}"
-  | "--max-depth" :: [], _ =>
-      .error "--max-depth expects a natural number"
-  | "--baseline" :: rest, opts =>
-      parseArgs rest { opts with baseline := true }
-  | "--diagnostics" :: rest, opts =>
-      parseArgs rest (withDiagnostics opts)
-  | "--diagnostics-output" :: "console" :: rest, opts =>
-      parseArgs rest (withDiagnosticsOutput opts DiagnosticsOutput.console)
-  | "--diagnostics-output" :: "stderr" :: rest, opts =>
-      parseArgs rest (withDiagnosticsOutput opts DiagnosticsOutput.stderr)
-  | "--diagnostics-output" :: "stdout" :: rest, opts =>
-      parseArgs rest (withDiagnosticsOutput opts DiagnosticsOutput.stdout)
-  | "--diagnostics-output" :: value :: _, _ =>
-      .error s!"--diagnostics-output expects console, stderr, or stdout, got {value}"
-  | "--diagnostics-output" :: [], _ =>
-      .error "--diagnostics-output expects console, stderr, or stdout"
-  | "--help" :: _, opts =>
-      .ok opts
-  | arg :: rest, opts =>
-      if arg.startsWith "--" then
-        .error s!"unknown option: {arg}"
-      else
-        parseArgs rest { opts with paths := opts.paths.push arg }
+  | args, opts => do
+      match ← ReducerArgs.parse? args opts.reducer with
+      | some (rest, reducer) => parseArgs rest { opts with reducer := reducer }
+      | none =>
+          match args with
+          | arg :: rest =>
+              if arg.startsWith "--" then
+                .error s!"unknown option: {arg}"
+              else
+                parseArgs rest { opts with paths := opts.paths.push arg }
+          | [] => .ok opts
 
 private structure TokenState (ρ : Type) where
   current : String
@@ -166,7 +141,7 @@ def main (args : List String) : IO Unit := do
         IO.eprintln message
         IO.eprintln usage
         IO.Process.exit 1
-  if args.contains "--help" then
+  if opts.reducer.help then
     IO.println usage
   else if opts.paths.isEmpty then
     IO.eprintln "missing input file"
@@ -174,20 +149,22 @@ def main (args : List String) : IO Unit := do
     IO.Process.exit 1
   else
     checkInputPaths opts.paths
-    if opts.baseline && opts.diagnostics.enabled then
-      IO.eprintln "--diagnostics is only available for the reducer implementation"
-      IO.Process.exit 1
+    match opts.reducer.validate with
+    | .error message =>
+        IO.eprintln message
+        IO.Process.exit 1
+    | .ok () => pure ()
     let startMs ← IO.monoMsNow
     let (implementation, counts) ←
-      if opts.baseline then
+      if opts.reducer.baseline then
         pure ("sequential reducer", ← wordCountsSequential opts.paths)
       else
-        let cfg : Config := { Config.default with maxDepth := opts.maxDepth, diagnostics := opts.diagnostics }
+        let cfg := opts.reducer.config
         let name :=
-          if opts.maxDepth == 0 then
-            s!"sequential reducer (maxDepth {opts.maxDepth})"
+          if cfg.maxDepth == 0 then
+            s!"sequential reducer (maxDepth {cfg.maxDepth})"
           else
-            s!"parallel reducer (maxDepth {opts.maxDepth})"
+            s!"parallel reducer (maxDepth {cfg.maxDepth})"
         pure (name, ← wordCounts cfg opts.paths)
     let elapsedMs := (← IO.monoMsNow) - startMs
     printTop opts.paths opts.top implementation elapsedMs counts

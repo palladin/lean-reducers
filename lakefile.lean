@@ -22,8 +22,19 @@ lean_exe lean_reducers_tests where
   root := `Test
   supportInterpreter := true
 
+lean_lib ExamplesSupport where
+  roots := #[`Examples.ReducerArgs]
+
 lean_exe word_count where
   root := `Examples.WordCount
+  supportInterpreter := true
+
+lean_exe line_count where
+  root := `Examples.LineCount
+  supportInterpreter := true
+
+lean_exe grep_count where
+  root := `Examples.GrepCount
   supportInterpreter := true
 
 lean_exe fetch_wikitext103 where
