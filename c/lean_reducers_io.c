@@ -13,6 +13,7 @@
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #include <mach/processor_info.h>
+#include <sys/sysctl.h>
 #endif
 
 #ifdef _WIN32
@@ -58,14 +59,18 @@ static lean_obj_res lean_reducers_process_sample_ok(
         uint64_t rss_kb,
         uint64_t read_bytes,
         uint64_t write_bytes,
-        uint64_t cpu_micros) {
-    char out[128];
+        uint64_t cpu_micros,
+        uint64_t system_total_kb,
+        uint64_t system_available_kb) {
+    char out[192];
     size_t used = 0;
     out[0] = '\0';
     if (lean_reducers_append_sample_field(out, sizeof(out), &used, rss_kb) != 0 ||
         lean_reducers_append_sample_field(out, sizeof(out), &used, read_bytes) != 0 ||
         lean_reducers_append_sample_field(out, sizeof(out), &used, write_bytes) != 0 ||
-        lean_reducers_append_sample_field(out, sizeof(out), &used, cpu_micros) != 0) {
+        lean_reducers_append_sample_field(out, sizeof(out), &used, cpu_micros) != 0 ||
+        lean_reducers_append_sample_field(out, sizeof(out), &used, system_total_kb) != 0 ||
+        lean_reducers_append_sample_field(out, sizeof(out), &used, system_available_kb) != 0) {
         return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("process sample buffer was too small")));
     }
     return lean_io_result_mk_ok(lean_mk_string(out));
@@ -321,11 +326,38 @@ LEAN_EXPORT lean_obj_res lean_reducers_cpu_percentages(void) {
 #endif
 
 #if defined(__APPLE__) && defined(__MACH__)
+static void lean_reducers_macos_memory_kb(uint64_t * total_kb, uint64_t * available_kb) {
+    *total_kb = LEAN_REDUCERS_UNKNOWN_U64;
+    *available_kb = LEAN_REDUCERS_UNKNOWN_U64;
+
+    uint64_t total_bytes = 0;
+    size_t total_size = sizeof(total_bytes);
+    if (sysctlbyname("hw.memsize", &total_bytes, &total_size, NULL, 0) == 0) {
+        *total_kb = total_bytes / 1024;
+    }
+
+    mach_port_t host = mach_host_self();
+    vm_size_t page_size = 0;
+    vm_statistics64_data_t vm_stats;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_page_size(host, &page_size) == KERN_SUCCESS &&
+        host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&vm_stats, &count) == KERN_SUCCESS) {
+        /* macOS has no Linux-style MemAvailable; include reclaimable inactive pages. */
+        uint64_t available_pages =
+            (uint64_t)vm_stats.free_count +
+            (uint64_t)vm_stats.inactive_count;
+        *available_kb = available_pages * (uint64_t)page_size / 1024;
+    }
+    mach_port_deallocate(mach_task_self(), host);
+}
+
 LEAN_EXPORT lean_obj_res lean_reducers_process_sample(void) {
     uint64_t rss_kb = LEAN_REDUCERS_UNKNOWN_U64;
     uint64_t read_bytes = LEAN_REDUCERS_UNKNOWN_U64;
     uint64_t write_bytes = LEAN_REDUCERS_UNKNOWN_U64;
     uint64_t cpu_micros = lean_reducers_process_cpu_micros();
+    uint64_t system_total_kb = LEAN_REDUCERS_UNKNOWN_U64;
+    uint64_t system_available_kb = LEAN_REDUCERS_UNKNOWN_U64;
 
     struct rusage_info_v4 rusage;
     memset(&rusage, 0, sizeof(rusage));
@@ -339,7 +371,9 @@ LEAN_EXPORT lean_obj_res lean_reducers_process_sample(void) {
         write_bytes = rusage.ri_diskio_byteswritten;
     }
 
-    return lean_reducers_process_sample_ok(rss_kb, read_bytes, write_bytes, cpu_micros);
+    lean_reducers_macos_memory_kb(&system_total_kb, &system_available_kb);
+    return lean_reducers_process_sample_ok(
+        rss_kb, read_bytes, write_bytes, cpu_micros, system_total_kb, system_available_kb);
 }
 #elif defined(__linux__)
 static uint64_t lean_reducers_linux_rss_kb(void) {
@@ -388,13 +422,39 @@ static void lean_reducers_linux_io_bytes(uint64_t * read_bytes, uint64_t * write
     fclose(file);
 }
 
+static void lean_reducers_linux_memory_kb(uint64_t * total_kb, uint64_t * available_kb) {
+    *total_kb = LEAN_REDUCERS_UNKNOWN_U64;
+    *available_kb = LEAN_REDUCERS_UNKNOWN_U64;
+
+    FILE * file = fopen("/proc/meminfo", "r");
+    if (file == NULL) {
+        return;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), file) != NULL) {
+        unsigned long long value = 0;
+        if (sscanf(line, "MemTotal: %llu kB", &value) == 1) {
+            *total_kb = (uint64_t)value;
+        } else if (sscanf(line, "MemAvailable: %llu kB", &value) == 1) {
+            *available_kb = (uint64_t)value;
+        }
+    }
+
+    fclose(file);
+}
+
 LEAN_EXPORT lean_obj_res lean_reducers_process_sample(void) {
     uint64_t rss_kb = lean_reducers_linux_rss_kb();
     uint64_t read_bytes = LEAN_REDUCERS_UNKNOWN_U64;
     uint64_t write_bytes = LEAN_REDUCERS_UNKNOWN_U64;
     uint64_t cpu_micros = lean_reducers_process_cpu_micros();
+    uint64_t system_total_kb = LEAN_REDUCERS_UNKNOWN_U64;
+    uint64_t system_available_kb = LEAN_REDUCERS_UNKNOWN_U64;
     lean_reducers_linux_io_bytes(&read_bytes, &write_bytes);
-    return lean_reducers_process_sample_ok(rss_kb, read_bytes, write_bytes, cpu_micros);
+    lean_reducers_linux_memory_kb(&system_total_kb, &system_available_kb);
+    return lean_reducers_process_sample_ok(
+        rss_kb, read_bytes, write_bytes, cpu_micros, system_total_kb, system_available_kb);
 }
 #else
 LEAN_EXPORT lean_obj_res lean_reducers_process_sample(void) {

@@ -144,6 +144,8 @@ structure ProcessSample where
   readBytes : Option Nat
   writeBytes : Option Nat
   cpuMicros : Option Nat
+  systemTotalKB : Option Nat
+  systemAvailableKB : Option Nat
 
 structure ProcessIORates where
   readTenths : Option Nat := none
@@ -263,18 +265,21 @@ private def sampleCpuPercentages : IO (Array Nat) := do
 private def sampleProcess : IO (Option ProcessSample) := do
   try
     let fields := wordsAscii (← processSampleString)
-    match fields[0]?, fields[1]?, fields[2]?, fields[3]? with
-    | some rss, some readBytes, some writeBytes, some cpuMicros =>
+    match fields[0]?, fields[1]?, fields[2]?, fields[3]?, fields[4]?, fields[5]? with
+    | some rss, some readBytes, some writeBytes, some cpuMicros, some systemTotal, some systemAvailable =>
         let sample : ProcessSample := {
           rssKB := parseOptionalNat rss,
           readBytes := parseOptionalNat readBytes,
           writeBytes := parseOptionalNat writeBytes,
-          cpuMicros := parseOptionalNat cpuMicros
+          cpuMicros := parseOptionalNat cpuMicros,
+          systemTotalKB := parseOptionalNat systemTotal,
+          systemAvailableKB := parseOptionalNat systemAvailable
         }
-        match sample.rssKB, sample.readBytes, sample.writeBytes, sample.cpuMicros with
-        | none, none, none, none => pure none
-        | _, _, _, _ => pure (some sample)
-    | _, _, _, _ => pure none
+        match sample.rssKB, sample.readBytes, sample.writeBytes, sample.cpuMicros,
+            sample.systemTotalKB, sample.systemAvailableKB with
+        | none, none, none, none, none, none => pure none
+        | _, _, _, _, _, _ => pure (some sample)
+    | _, _, _, _, _, _ => pure none
   catch
   | _ => pure none
 
@@ -374,13 +379,29 @@ private def ioLayer (cfg : DiagnosticsConfig) (rates : ProcessIORates) : String 
       s!"  {label cfg "IO os   "} {bar cfg "34" cfg.width 0 (cfg.ioScaleMBps * 10)} " ++
       s!"{dim cfg "n/a"}  r {dim cfg "n/a"}  w {dim cfg "n/a"}"
 
-private def memoryLayer (cfg : DiagnosticsConfig) (sample? : Option ProcessSample) : String :=
+private def processMemoryLayer (cfg : DiagnosticsConfig) (sample? : Option ProcessSample) : String :=
   match sample?.bind (fun sample => sample.rssKB) with
   | some kb =>
       let mb := kb / 1024
-      s!"  {label cfg "MEM os  "} {bar cfg "35" cfg.width mb cfg.memoryScaleMB} {value cfg s!"{mb} MB"}"
+      s!"  {label cfg "MEM proc"} {bar cfg "35" cfg.width mb cfg.memoryScaleMB} {value cfg s!"{mb} MB"}"
   | none =>
-      s!"  {label cfg "MEM os  "} {bar cfg "35" cfg.width 0 cfg.memoryScaleMB} {dim cfg "n/a"}"
+      s!"  {label cfg "MEM proc"} {bar cfg "35" cfg.width 0 cfg.memoryScaleMB} {dim cfg "n/a"}"
+
+private def systemMemoryLayer (cfg : DiagnosticsConfig) (sample? : Option ProcessSample) : String :=
+  match sample?.bind (fun sample => sample.systemTotalKB),
+      sample?.bind (fun sample => sample.systemAvailableKB) with
+  | some totalKB, some availableKB =>
+      let availableKB := min totalKB availableKB
+      let usedKB := totalKB - availableKB
+      let usedPercent :=
+        if totalKB == 0 then
+          0
+        else
+          (usedKB * 100) / totalKB
+      s!"  {label cfg "MEM sys "} {bar cfg "35" cfg.width usedKB totalKB} " ++
+      s!"{value cfg s!"{usedPercent}%"}  avail {value cfg s!"{availableKB / 1024} MB"}"
+  | _, _ =>
+      s!"  {label cfg "MEM sys "} {bar cfg "35" cfg.width 0 1} {dim cfg "n/a"}"
 
 private def renderDiagnosticsFrame (cfg : DiagnosticsConfig)
     (state : DiagnosticsState) (renderState : IO.Ref DiagnosticsRenderState) : IO String := do
@@ -412,12 +433,14 @@ private def renderDiagnosticsFrame (cfg : DiagnosticsConfig)
   let io := ioLayer cfg ioRates
   let cpuSummary := cpuSummaryLayer cfg cpuSamples state.cpuBars ioRates.cpuPercentTenths
   let cpuRows := cpuLayerRows cfg cpuSamples state.cpuBars
-  let memory := memoryLayer cfg sample?
+  let processMemory := processMemoryLayer cfg sample?
+  let systemMemory := systemMemoryLayer cfg sample?
   let ranges :=
     s!"  {label cfg "RANGES  "} active {value cfg (toString state.activeRanges)}  " ++
     s!"done {value cfg (toString state.completedRanges)}  " ++
     s!"elapsed {value cfg s!"{formatTenths (secondsTenths elapsed)}s"}"
-  pure (String.intercalate "\n" ([title, progress, io, cpuSummary] ++ cpuRows ++ [memory, ranges]))
+  pure (String.intercalate "\n"
+    ([title, progress, io, cpuSummary] ++ cpuRows ++ [processMemory, systemMemory, ranges]))
 
 private def frameLineCount (frame : String) : Nat :=
   frame.foldl

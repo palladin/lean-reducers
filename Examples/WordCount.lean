@@ -66,26 +66,26 @@ private def parseArgs : List String -> Options -> Except String Options
         parseArgs rest { opts with paths := opts.paths.push arg }
 
 private structure TokenState (ρ : Type) where
-  current : List Char
-  acc : ρ
+  current : String
+  apply : ρ → ρ
 
 private def flushToken (step : String → ρ → ρ) (state : TokenState ρ) : TokenState ρ :=
   if state.current.isEmpty then
     state
   else
-    { current := [], acc := step (String.ofList state.current) state.acc }
+    { current := "", apply := fun acc => state.apply (step state.current acc) }
 
 private def wordsOfLine (line : String) : ReducerSeq String where
   run := fun unit step =>
     let state :=
-      line.foldr
-        (fun c state =>
-        if c.isAlphanum then
-            { state with current := c.toLower :: state.current }
-        else
+      line.foldl
+        (fun state c =>
+          if c.isAlphanum then
+            { state with current := state.current.push c.toLower }
+          else
             flushToken step state)
-        { current := [], acc := unit }
-    (flushToken step state).acc
+        { current := "", apply := id }
+    (flushToken step state).apply unit
 
 private def wordCounts (cfg : Config) (paths : Array System.FilePath) : IO (Array (String × Nat)) :=
   ReducerPar.readLinesFromFiles paths

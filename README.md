@@ -306,7 +306,8 @@ For parallel line readers, `grain` is interpreted as a target byte chunk size
 before newline-boundary repair.
 Diagnostics are disabled by default; line readers can emit a colorized,
 top-anchored panel with progress, OS-sampled process IO throughput, OS-sampled
-per-CPU bars, and OS-sampled process memory through a parameterized output sink.
+per-CPU bars, process RSS, and system memory usage with available memory through
+a parameterized output sink.
 The default sink is `DiagnosticsOutput.console`. `cpuBars := 0` means
 auto-detect the CPU count.
 
