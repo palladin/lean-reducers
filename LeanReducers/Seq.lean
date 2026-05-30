@@ -21,7 +21,19 @@ abbrev ReducerSeqIO (α : Type) :=
 
 namespace ReducerSeq
 
+def empty : ReducerSeq α where
+  run := fun unit _ => unit
+
+def one (a : α) : ReducerSeq α where
+  run := fun unit step => step a unit
+
+def append (left right : ReducerSeq α) : ReducerSeq α where
+  run := fun unit step => left.run (right.run unit step) step
+
 def ofArray (as : Array α) : ReducerSeq α where
+  run := fun unit step => as.foldr step unit
+
+def ofList (as : List α) : ReducerSeq α where
   run := fun unit step => as.foldr step unit
 
 def ofArrayM [Monad m] (as : m (Array α)) : ReducerSeqM m α where
@@ -71,9 +83,9 @@ private def mapM (xs : ReducerSeqM m α) (f : α → β) : ReducerSeqM m β wher
   run := fun unit step =>
     xs.run unit (fun a acc => step (f a) acc)
 
-private def flatMapM (xs : ReducerSeqM m α) (f : α → Array β) : ReducerSeqM m β where
+private def flatMapM (xs : ReducerSeqM m α) (f : α → ReducerSeq β) : ReducerSeqM m β where
   run := fun unit step =>
-    xs.run unit (fun a acc => (f a).foldr step acc)
+    xs.run unit (fun a acc => (f a).run acc step)
 
 private def filterM (xs : ReducerSeqM m α) (p : α → Bool) : ReducerSeqM m α where
   run := fun unit step =>
@@ -141,7 +153,7 @@ private def avgFloatM [Monad m] (xs : ReducerSeqM m Float) : m (Option Float) :=
 def map (xs : ReducerSeq α) (f : α → β) : ReducerSeq β :=
   mapM xs f
 
-def flatMap (xs : ReducerSeq α) (f : α → Array β) : ReducerSeq β :=
+def flatMap (xs : ReducerSeq α) (f : α → ReducerSeq β) : ReducerSeq β :=
   flatMapM xs f
 
 def filter (xs : ReducerSeq α) (p : α → Bool) : ReducerSeq α :=
@@ -194,7 +206,7 @@ namespace ReducerSeqM
 def map (xs : ReducerSeqM m α) (f : α → β) : ReducerSeqM m β :=
   ReducerSeq.mapM xs f
 
-def flatMap (xs : ReducerSeqM m α) (f : α → Array β) : ReducerSeqM m β :=
+def flatMap (xs : ReducerSeqM m α) (f : α → ReducerSeq β) : ReducerSeqM m β :=
   ReducerSeq.flatMapM xs f
 
 def filter (xs : ReducerSeqM m α) (p : α → Bool) : ReducerSeqM m α :=

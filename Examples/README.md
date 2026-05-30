@@ -12,6 +12,9 @@ ReducerPar.readLinesFromFiles paths
   |>.groupBy (MonoidSpec.additive Nat) id (fun _ count => count + 1)
 ```
 
+`wordsOfLine` returns a `ReducerSeq String`, so token emission is fused into the
+outer reduction without allocating an intermediate word array.
+
 Run the bundled smoke sample:
 
 ```sh

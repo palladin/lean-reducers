@@ -68,17 +68,19 @@ def mapNat (x : Nat) : Nat :=
 def keepNat (x : Nat) : Bool :=
   x % 3 != 1
 
-def expandNat (x : Nat) : Array Nat :=
+def expandNatArray (x : Nat) : Array Nat :=
   #[x, x * 2 + 1, x % 5]
 
-def arrayFlatMap (xs : Array α) (f : α → Array β) : Array β :=
-  xs.foldl (fun acc x => acc ++ f x) #[]
+def expandNat (x : Nat) : ReducerSeq Nat :=
+  ReducerSeq.one x
+    |>.append (ReducerSeq.one (x * 2 + 1))
+    |>.append (ReducerSeq.one (x % 5))
 
 def seqPipelineNat (raw : Array Nat) : Array Nat :=
   smallNats raw
     |>.map mapNat
     |>.filter keepNat
-    |> fun xs => arrayFlatMap xs expandNat
+    |>.foldl (fun acc x => acc ++ expandNatArray x) #[]
 
 def seqNatSum (xs : Array Nat) : Nat :=
   xs.foldl (fun acc x => acc + x) 0
@@ -632,7 +634,7 @@ def checkFileCase (idx : Nat) (raw : FileCase) : IO Unit := do
     ReducerPar.readLines leftPath
       |>.map String.length
       |>.filter (fun n => n % 2 == 0)
-      |>.flatMap (fun n => #[n, n + 1])
+      |>.flatMap (fun n => ReducerSeq.one n |>.append (ReducerSeq.one (n + 1)))
       |>.sum
   assertEq s!"{label}: file map/filter/flatMap/sum"
     (seqNatSum (seqLinePipeline leftLines)) pipelineSum
@@ -705,7 +707,7 @@ def checkFileCase (idx : Nat) (raw : FileCase) : IO Unit := do
     ReducerSeq.readLines leftPath
       |>.map String.length
       |>.filter (fun n => n % 2 == 0)
-      |>.flatMap (fun n => #[n, n + 1])
+      |>.flatMap (fun n => ReducerSeq.one n |>.append (ReducerSeq.one (n + 1)))
       |>.sum
   assertEq s!"{label}: ReducerSeq file map/filter/flatMap/sum"
     (seqNatSum (seqLinePipeline leftLines)) seqPipelineSum

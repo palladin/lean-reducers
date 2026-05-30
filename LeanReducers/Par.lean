@@ -4,6 +4,7 @@ import Init.System.IO
 import LeanReducers.Internal.Array
 import LeanReducers.Internal.File
 import LeanReducers.Internal.GroupBy
+import LeanReducers.Seq
 
 namespace LeanReducers
 
@@ -57,12 +58,12 @@ private def mapM (xs : ReducerParM m α) (f : α → β) : ReducerParM m β wher
   run := fun cfg q =>
     xs.run cfg { unit := q.unit, combine := q.combine, step := fun a acc => q.step (f a) acc }
 
-private def flatMapM (xs : ReducerParM m α) (f : α → Array β) : ReducerParM m β where
+private def flatMapM (xs : ReducerParM m α) (f : α → ReducerSeq β) : ReducerParM m β where
   run := fun cfg q =>
     xs.run cfg {
       unit := q.unit
       combine := q.combine
-      step := fun a acc => (f a).foldr q.step acc
+      step := fun a acc => (f a).run acc q.step
     }
 
 private def filterM (xs : ReducerParM m α) (p : α → Bool) : ReducerParM m α where
@@ -197,7 +198,7 @@ private def avgFloatM [Monad m] (xs : ReducerParM m Float) : m (Option Float) :=
 def map (xs : ReducerPar α) (f : α → β) : ReducerPar β :=
   mapM xs f
 
-def flatMap (xs : ReducerPar α) (f : α → Array β) : ReducerPar β :=
+def flatMap (xs : ReducerPar α) (f : α → ReducerSeq β) : ReducerPar β :=
   flatMapM xs f
 
 def filter (xs : ReducerPar α) (p : α → Bool) : ReducerPar α :=
@@ -270,7 +271,7 @@ namespace ReducerParM
 def map (xs : ReducerParM m α) (f : α → β) : ReducerParM m β :=
   ReducerPar.mapM xs f
 
-def flatMap (xs : ReducerParM m α) (f : α → Array β) : ReducerParM m β :=
+def flatMap (xs : ReducerParM m α) (f : α → ReducerSeq β) : ReducerParM m β :=
   ReducerPar.flatMapM xs f
 
 def filter (xs : ReducerParM m α) (p : α → Bool) : ReducerParM m α :=

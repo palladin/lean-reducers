@@ -130,6 +130,18 @@ Both modes expose `ofArray`, `ofArrayM`, `readFile`, `readLines`,
 `readLinesFromFiles`, `readLinesFromFilesWithPath`, and `readChars` producers.
 Both also expose fused `map`, `filter`, and `flatMap` transforms.
 
+`flatMap` receives a pure sequential reducer for each input:
+
+```lean
+.flatMap : ReducerSeqM m α → (α → ReducerSeq β) → ReducerSeqM m β
+.flatMap : ReducerParM m α → (α → ReducerSeq β) → ReducerParM m β
+```
+
+The inner `ReducerSeq` is an allocation-free expansion plan. It is consumed
+inside the outer reduction; it does not introduce nested effects or parallel
+task trees. Build small expansions with `ReducerSeq.empty`, `one`, and `append`,
+or wrap an existing collection with `ReducerSeq.ofArray` or `ofList`.
+
 ### Sequential Terminals
 
 ```lean
@@ -173,7 +185,9 @@ each element. Parallel grouping receives its unit and chunk combiner through
 #eval
   #[1, 2, 3]
     |> ReducerSeq.ofArray
-    |>.flatMap (fun x => #[x, x * 10])
+    |>.flatMap (fun x =>
+      ReducerSeq.one x
+        |>.append (ReducerSeq.one (x * 10)))
     |>.sum
 -- 66
 ```
