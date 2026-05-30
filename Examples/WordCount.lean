@@ -69,7 +69,7 @@ private def wordsOfLine (line : String) : ReducerSeq String where
 private def wordCounts (cfg : Config) (paths : Array System.FilePath) : IO (Array (String × Nat)) :=
   ReducerPar.readLinesFromFiles paths
     |>.flatMap wordsOfLine
-    |>.groupByWithConfig cfg (MonoidSpec.additive Nat) id (fun _ count => count + 1)
+    |>.groupBy (MonoidSpec.additive Nat) id (fun _ count => count + 1) (cfg := cfg)
 
 private def wordCountsSequential (paths : Array System.FilePath) : IO (Array (String × Nat)) :=
   ReducerSeq.readLinesFromFiles paths
@@ -216,8 +216,8 @@ private def wordCountsFused (paths : Array System.FilePath) : IO (Array (String 
   return table.toArray
 
 private def wordCountsFusedPar (cfg : Config) (paths : Array System.FilePath) : IO (Array (String × Nat)) := do
-  let table ← (ReducerPar.readLinesFromFiles paths).reduceWithoutLawsWithConfig
-    cfg (WordTable.empty 4096) mergeTables countLine
+  let table ← (ReducerPar.readLinesFromFiles paths).reduceWithoutLaws
+    (WordTable.empty 4096) mergeTables countLine (cfg := cfg)
   return table.toArray
 
 private def wordLess (left right : String × Nat) : Bool :=

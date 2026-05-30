@@ -32,7 +32,7 @@ private partial def parseArgs : List String → Options → Except String Option
 
 private def lineCountParallel (opts : Options) : IO Nat := do
   ReducerPar.readLinesFromFiles opts.paths
-    |>.reduceMapWithLawsWithConfig opts.reducer.config (MonoidSpec.additive Nat) (fun _ => 1)
+    |>.reduceMap (MonoidSpec.additive Nat) (fun _ => 1) (cfg := opts.reducer.config)
 
 private def lineCountSequential (opts : Options) : IO Nat :=
   ReducerSeq.readLinesFromFiles opts.paths

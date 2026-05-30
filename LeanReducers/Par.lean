@@ -205,35 +205,33 @@ def flatMap (xs : ReducerPar α) (f : α → ReducerSeq β) : ReducerPar β :=
 def filter (xs : ReducerPar α) (p : α → Bool) : ReducerPar α :=
   filterM xs p
 
-def reduceWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ)
-    (xs : ReducerPar α) : ρ :=
+/--
+Parallel reduce with a proven monoid combiner (`MonoidSpec`) and a local step.
+This is the lawful, default path; the unchecked variant is `reduceWithoutLaws`.
+Tuning is optional via the trailing `cfg` (defaults to `Config.default`).
+-/
+def reduce (spec : MonoidSpec ρ) (step : α → ρ → ρ) (xs : ReducerPar α)
+    (cfg : Config := {}) : ρ :=
   reduceWithLawsWithConfigM cfg spec step xs
 
-def reduceWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) (xs : ReducerPar α) : ρ :=
-  reduceWithLawsM spec step xs
-
-def reduceMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
-    (xs : ReducerPar α) : ρ :=
+/-- Parallel map-then-reduce with a proven monoid (`MonoidSpec`); `cfg` is optional. -/
+def reduceMap (spec : MonoidSpec ρ) (f : α → ρ) (xs : ReducerPar α)
+    (cfg : Config := {}) : ρ :=
   reduceMapWithLawsWithConfigM cfg spec f xs
 
-def reduceMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) (xs : ReducerPar α) : ρ :=
-  reduceMapWithLawsM spec f xs
-
-def groupByWithConfig [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
-    (key : α → κ) (step : α → ν → ν) (xs : ReducerPar α) : Array (κ × ν) :=
+/-- Group by `key`, combining per-key values with a proven monoid; `cfg` is optional. -/
+def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
+    (step : α → ν → ν) (xs : ReducerPar α) (cfg : Config := {}) : Array (κ × ν) :=
   groupByWithConfigM cfg valueSpec key step xs
 
-def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
-    (step : α → ν → ν) (xs : ReducerPar α) : Array (κ × ν) :=
-  groupByM valueSpec key step xs
-
-def reduceWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
-    (step : α → ρ → ρ) (xs : ReducerPar α) : ρ :=
-  reduceWithoutLawsWithConfigM cfg unit combine step xs
-
+/--
+Reduce without law proofs, for callers who cannot provide a `MonoidSpec`. The
+same parallel regrouping rules still apply, so the supplied `combine` must be
+associative with `unit` as identity for the result to be deterministic.
+-/
 def reduceWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
-    (xs : ReducerPar α) : ρ :=
-  reduceWithoutLawsM unit combine step xs
+    (xs : ReducerPar α) (cfg : Config := {}) : ρ :=
+  reduceWithoutLawsWithConfigM cfg unit combine step xs
 
 def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] (xs : ReducerPar α) : α :=
   sumM xs
@@ -278,38 +276,33 @@ def flatMap (xs : ReducerParM m α) (f : α → ReducerSeq β) : ReducerParM m �
 def filter (xs : ReducerParM m α) (p : α → Bool) : ReducerParM m α :=
   ReducerPar.filterM xs p
 
-def reduceWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
-    (xs : ReducerParM m α) : m ρ :=
+/--
+Parallel reduce with a proven monoid combiner (`MonoidSpec`) and a local step.
+This is the lawful, default path; the unchecked variant is `reduceWithoutLaws`.
+Tuning is optional via the trailing `cfg` (defaults to `Config.default`).
+-/
+def reduce (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
+    (xs : ReducerParM m α) (cfg : Config := {}) : m ρ :=
   ReducerPar.reduceWithLawsWithConfigM cfg spec step xs
 
-def reduceWithLaws (spec : MonoidSpec ρ) (step : α → ρ → ρ) [Monad m]
-    (xs : ReducerParM m α) : m ρ :=
-  ReducerPar.reduceWithLawsM spec step xs
-
-def reduceMapWithLawsWithConfig (cfg : Config) (spec : MonoidSpec ρ) (f : α → ρ)
-    [Monad m] (xs : ReducerParM m α) : m ρ :=
+/-- Parallel map-then-reduce with a proven monoid (`MonoidSpec`); `cfg` is optional. -/
+def reduceMap (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
+    (xs : ReducerParM m α) (cfg : Config := {}) : m ρ :=
   ReducerPar.reduceMapWithLawsWithConfigM cfg spec f xs
 
-def reduceMapWithLaws (spec : MonoidSpec ρ) (f : α → ρ) [Monad m]
-    (xs : ReducerParM m α) : m ρ :=
-  ReducerPar.reduceMapWithLawsM spec f xs
-
-def groupByWithConfig [BEq κ] [Hashable κ] (cfg : Config) (valueSpec : MonoidSpec ν)
-    (key : α → κ) (step : α → ν → ν) [Monad m]
-    (xs : ReducerParM m α) : m (Array (κ × ν)) :=
+/-- Group by `key`, combining per-key values with a proven monoid; `cfg` is optional. -/
+def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
+    (step : α → ν → ν) [Monad m] (xs : ReducerParM m α) (cfg : Config := {}) : m (Array (κ × ν)) :=
   ReducerPar.groupByWithConfigM cfg valueSpec key step xs
 
-def groupBy [BEq κ] [Hashable κ] (valueSpec : MonoidSpec ν) (key : α → κ)
-    (step : α → ν → ν) [Monad m] (xs : ReducerParM m α) : m (Array (κ × ν)) :=
-  ReducerPar.groupByM valueSpec key step xs
-
-def reduceWithoutLawsWithConfig (cfg : Config) (unit : ρ) (combine : ρ → ρ → ρ)
-    (step : α → ρ → ρ) [Monad m] (xs : ReducerParM m α) : m ρ :=
-  ReducerPar.reduceWithoutLawsWithConfigM cfg unit combine step xs
-
+/--
+Reduce without law proofs, for callers who cannot provide a `MonoidSpec`. The
+same parallel regrouping rules still apply, so the supplied `combine` must be
+associative with `unit` as identity for the result to be deterministic.
+-/
 def reduceWithoutLaws (unit : ρ) (combine : ρ → ρ → ρ) (step : α → ρ → ρ)
-    [Monad m] (xs : ReducerParM m α) : m ρ :=
-  ReducerPar.reduceWithoutLawsM unit combine step xs
+    [Monad m] (xs : ReducerParM m α) (cfg : Config := {}) : m ρ :=
+  ReducerPar.reduceWithoutLawsWithConfigM cfg unit combine step xs
 
 def sum [Add α] [OfNat α 0] [LawfulAddMonoid α] [Monad m]
     (xs : ReducerParM m α) : m α :=

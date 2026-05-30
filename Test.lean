@@ -114,10 +114,10 @@ def seqFloatAvg? (xs : Array Float) : Option Float :=
     some (seqFloatSum xs / Float.ofNat xs.size)
 
 def collectReducerParWithConfig (cfg : Config) (xs : ReducerPar α) : List α :=
-  ReducerPar.reduceWithoutLawsWithConfig cfg ([] : List α)
+  ReducerPar.reduceWithoutLaws ([] : List α)
     (fun left right => left ++ right)
     (fun x acc => x :: acc)
-    xs
+    xs (cfg := cfg)
 
 def collectReducerPar (xs : ReducerPar α) : List α :=
   ReducerPar.reduceWithoutLaws ([] : List α)
@@ -126,10 +126,10 @@ def collectReducerPar (xs : ReducerPar α) : List α :=
     xs
 
 def collectReducerParIOWithConfig (cfg : Config) (xs : ReducerParIO α) : IO (List α) :=
-  ReducerParM.reduceWithoutLawsWithConfig cfg ([] : List α)
+  ReducerParM.reduceWithoutLaws ([] : List α)
     (fun left right => left ++ right)
     (fun x acc => x :: acc)
-    xs
+    xs (cfg := cfg)
 
 def collectReducerParIO (xs : ReducerParIO α) : IO (List α) :=
   ReducerParM.reduceWithoutLaws ([] : List α)
@@ -243,7 +243,7 @@ def propReduceWithLawsWithConfigMatchesSeq (raw : Array Nat) (grain depth : Nat)
   let actual :=
     data
       |> ReducerPar.ofArray
-      |> ReducerPar.reduceWithLawsWithConfig cfg (MonoidSpec.additive Nat) (fun x acc => x + acc)
+      |> ReducerPar.reduce (MonoidSpec.additive Nat) (fun x acc => x + acc) (cfg := cfg)
   actual == seqNatSum data
 
 def propReduceWithLawsMatchesSeq (raw : Array Nat) : Bool :=
@@ -251,7 +251,7 @@ def propReduceWithLawsMatchesSeq (raw : Array Nat) : Bool :=
   let actual :=
     data
       |> ReducerPar.ofArray
-      |> ReducerPar.reduceWithLaws (MonoidSpec.additive Nat) (fun x acc => x + acc)
+      |> ReducerPar.reduce (MonoidSpec.additive Nat) (fun x acc => x + acc)
   actual == seqNatSum data
 
 def propReduceMapWithLawsWithConfigMatchesSeq (raw : Array Nat) (grain depth : Nat) : Bool :=
@@ -261,7 +261,7 @@ def propReduceMapWithLawsWithConfigMatchesSeq (raw : Array Nat) (grain depth : N
   let actual :=
     data
       |> ReducerPar.ofArray
-      |> ReducerPar.reduceMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) f
+      |> ReducerPar.reduceMap (MonoidSpec.additive Nat) f (cfg := cfg)
   let expected := data.foldl (fun acc x => acc + f x) 0
   actual == expected
 
@@ -271,7 +271,7 @@ def propReduceMapWithLawsMatchesSeq (raw : Array Nat) : Bool :=
   let actual :=
     data
       |> ReducerPar.ofArray
-      |> ReducerPar.reduceMapWithLaws (MonoidSpec.additive Nat) f
+      |> ReducerPar.reduceMap (MonoidSpec.additive Nat) f
   let expected := data.foldl (fun acc x => acc + f x) 0
   actual == expected
 
@@ -281,9 +281,9 @@ def propGroupByWithConfigMatchesSeq (raw : Array Nat) (grain depth : Nat) : Bool
   let actual :=
     data
       |> ReducerPar.ofArray
-      |> ReducerPar.groupByWithConfig cfg (MonoidSpec.additive Nat)
+      |> ReducerPar.groupBy (MonoidSpec.additive Nat)
         (fun x => x % 7)
-        (fun x acc => x + 1 + acc)
+        (fun x acc => x + 1 + acc) (cfg := cfg)
       |> groupTotals
   actual == seqGroupTotals data
 
@@ -441,39 +441,39 @@ def checkEffectCase (idx : Nat) (raw : EffectCase) : IO Unit := do
       |>.map mapNat
       |>.filter keepNat
       |>.flatMap expandNat
-      |>.reduceWithoutLawsWithConfig cfg ([] : List Nat)
+      |>.reduceWithoutLaws ([] : List Nat)
         (fun left right => left ++ right)
-        (fun x acc => x :: acc)
+        (fun x acc => x :: acc) (cfg := cfg)
   assertEq s!"{label}: ReducerParM map/filter/flatMap/reduceWithoutLawsWithConfig"
     (seqPipelineNat xs).toList actualPipeline
 
   let actualReduceWithLaws ←
     source
-      |>.reduceWithLawsWithConfig cfg (MonoidSpec.additive Nat) (fun x acc => x + acc)
+      |>.reduce (MonoidSpec.additive Nat) (fun x acc => x + acc) (cfg := cfg)
   assertEq s!"{label}: ReducerParM reduceWithLawsWithConfig" (seqNatSum data) actualReduceWithLaws
 
   let actualReduceWithLawsDefault ←
     source
-      |>.reduceWithLaws (MonoidSpec.additive Nat) (fun x acc => x + acc)
+      |>.reduce (MonoidSpec.additive Nat) (fun x acc => x + acc)
   assertEq s!"{label}: ReducerParM reduceWithLaws" (seqNatSum data) actualReduceWithLawsDefault
 
   let f := fun x => x * 3 + 1
   let expectedReduceMapWithLaws := data.foldl (fun acc x => acc + f x) 0
   let actualReduceMapWithLawsWithConfig ←
     source
-      |>.reduceMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) f
+      |>.reduceMap (MonoidSpec.additive Nat) f (cfg := cfg)
   assertEq s!"{label}: ReducerParM reduceMapWithLawsWithConfig" expectedReduceMapWithLaws actualReduceMapWithLawsWithConfig
 
   let actualReduceMapWithLaws ←
     source
-      |>.reduceMapWithLaws (MonoidSpec.additive Nat) f
+      |>.reduceMap (MonoidSpec.additive Nat) f
   assertEq s!"{label}: ReducerParM reduceMapWithLaws" expectedReduceMapWithLaws actualReduceMapWithLaws
 
   let actualGroupByWithConfig ←
     source
-      |>.groupByWithConfig cfg (MonoidSpec.additive Nat)
+      |>.groupBy (MonoidSpec.additive Nat)
         (fun x => x % 7)
-        (fun x acc => x + 1 + acc)
+        (fun x acc => x + 1 + acc) (cfg := cfg)
   assertEq s!"{label}: ReducerParM groupByWithConfig"
     (seqGroupTotals data) (groupTotals actualGroupByWithConfig)
 
@@ -601,7 +601,7 @@ def checkFileCase (idx : Nat) (raw : FileCase) : IO Unit := do
 
   let readFileLength ←
     ReducerPar.readFile leftPath
-      |>.reduceMapWithLaws (MonoidSpec.additive Nat) String.length
+      |>.reduceMap (MonoidSpec.additive Nat) String.length
   assertEq s!"{label}: readFile/reduceMapWithLaws"
     leftContents.length readFileLength
 
@@ -641,29 +641,29 @@ def checkFileCase (idx : Nat) (raw : FileCase) : IO Unit := do
 
   let reduceLength ←
     ReducerPar.readLines leftPath
-      |>.reduceWithLawsWithConfig cfg (MonoidSpec.additive Nat)
-        (fun line acc => line.length + acc)
+      |>.reduce (MonoidSpec.additive Nat)
+        (fun line acc => line.length + acc) (cfg := cfg)
   assertEq s!"{label}: file reduceWithLawsWithConfig"
     (leftLines.foldl (fun acc line => acc + line.length) 0) reduceLength
 
   let reduceLengthDefault ←
     ReducerPar.readLines leftPath
-      |>.reduceWithLaws (MonoidSpec.additive Nat)
+      |>.reduce (MonoidSpec.additive Nat)
         (fun line acc => line.length + acc)
   assertEq s!"{label}: file reduceWithLaws"
     (leftLines.foldl (fun acc line => acc + line.length) 0) reduceLengthDefault
 
   let reduceMapLengthWithConfig ←
     ReducerPar.readLines leftPath
-      |>.reduceMapWithLawsWithConfig cfg (MonoidSpec.additive Nat) String.length
+      |>.reduceMap (MonoidSpec.additive Nat) String.length (cfg := cfg)
   assertEq s!"{label}: file reduceMapWithLawsWithConfig"
     (leftLines.foldl (fun acc line => acc + line.length) 0) reduceMapLengthWithConfig
 
   let groupsWithConfig ←
     ReducerPar.readLines leftPath
-      |>.groupByWithConfig cfg (MonoidSpec.additive Nat)
+      |>.groupBy (MonoidSpec.additive Nat)
         (fun line => line.length % 7)
-        (fun _ acc => acc + 1)
+        (fun _ acc => acc + 1) (cfg := cfg)
   assertEq s!"{label}: file groupByWithConfig"
     (seqLineCountGroups leftLines) (groupTotals groupsWithConfig)
 

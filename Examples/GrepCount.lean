@@ -36,7 +36,7 @@ private partial def parseArgs : List String → Options → Except String Option
 private def grepCountParallel (opts : Options) (pattern : String) : IO Nat := do
   ReducerPar.readLinesFromFiles opts.paths
     |>.filter (fun line => line.contains pattern)
-    |>.reduceMapWithLawsWithConfig opts.reducer.config (MonoidSpec.additive Nat) (fun _ => 1)
+    |>.reduceMap (MonoidSpec.additive Nat) (fun _ => 1) (cfg := opts.reducer.config)
 
 private def grepCountSequential (opts : Options) (pattern : String) : IO Nat :=
   ReducerSeq.readLinesFromFiles opts.paths
