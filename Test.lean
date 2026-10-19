@@ -592,8 +592,8 @@ def writeGeneratedFile (path : System.FilePath) (rawLines : Array Nat) (trailing
 def checkFileCase (idx : Nat) (raw : FileCase) : IO Unit := do
   let (leftRaw, leftTrailing, rightRaw, rightTrailing, grain, depth) := raw
   let cfg := cfgOf grain depth
-  let leftPath : System.FilePath := s!"/private/tmp/lean_reducers_prop_{idx}_left.txt"
-  let rightPath : System.FilePath := s!"/private/tmp/lean_reducers_prop_{idx}_right.txt"
+  let leftPath : System.FilePath := s!"/tmp/lean_reducers_prop_{idx}_left.txt"
+  let rightPath : System.FilePath := s!"/tmp/lean_reducers_prop_{idx}_right.txt"
   let label := s!"file case {idx}"
 
   let (leftContents, leftLines) ← writeGeneratedFile leftPath leftRaw leftTrailing
@@ -741,7 +741,7 @@ def runFileProperties : IO Unit := do
   ok "file producer generated cases" s!"{fileCases} cases"
 
   let longLine := "".pushn 'x' 5000
-  let boundaryPath : System.FilePath := "/private/tmp/lean_reducers_prop_boundary.txt"
+  let boundaryPath : System.FilePath := "/tmp/lean_reducers_prop_boundary.txt"
   let boundaryContents := s!"first\n{longLine}\n\nlast\n"
   IO.FS.writeFile boundaryPath boundaryContents
   let cfg := cfgOf 0 99
@@ -750,8 +750,8 @@ def runFileProperties : IO Unit := do
     (boundaryContents.splitOn "\n") actual
   ok "large line boundary repair" "1 targeted case"
 
-  let skewSmallPath : System.FilePath := "/private/tmp/lean_reducers_prop_skew_small.txt"
-  let skewLargePath : System.FilePath := "/private/tmp/lean_reducers_prop_skew_large.txt"
+  let skewSmallPath : System.FilePath := "/tmp/lean_reducers_prop_skew_small.txt"
+  let skewLargePath : System.FilePath := "/tmp/lean_reducers_prop_skew_large.txt"
   let skewSmallContents := "small\n"
   let skewLongLine := "".pushn 's' 5000
   let skewLargeContents := s!"large-first\n{skewLongLine}\nlarge-last\n"

@@ -2,7 +2,7 @@ import Lake
 open Lake DSL
 
 require plausible from git
-  "https://github.com/leanprover-community/plausible.git" @ "v4.30.0"
+  "https://github.com/leanprover-community/plausible.git" @ "v4.35.0"
 
 package lean_reducers where
 
@@ -20,6 +20,10 @@ lean_lib LeanReducers where
 @[default_target]
 lean_exe lean_reducers_tests where
   root := `Test
+  supportInterpreter := true
+
+lean_exe source_tests where
+  root := `SourceTests
   supportInterpreter := true
 
 lean_lib ExamplesSupport where

@@ -6,6 +6,7 @@ import LeanReducers.Internal.Array
 import LeanReducers.Internal.File
 import LeanReducers.Internal.GroupBy
 import LeanReducers.Seq
+import LeanReducers.ParallelIO
 
 namespace LeanReducers
 
@@ -26,6 +27,23 @@ abbrev ReducerParIO (α : Type) :=
   ReducerParM IO α
 
 namespace ReducerPar
+
+/-- Reduce independently assigned byte ranges using the same seek, newline
+repair and task tree as local files. Only the byte-source adapter changes. -/
+def readSourceRanges (ranges : Array (ByteRange ByteSource))
+    (trailingEmpty : Bool := true) : ReducerParIO String where
+  run := fun cfg q => Internal.foldFileLineRangesIO cfg q ranges trailingEmpty
+
+def readSources (sources : Array ByteSource) (trailingEmpty : Bool := true) : ReducerParIO String :=
+  readSourceRanges (sources.map fun source => { source, start := 0, stop := source.size }) trailingEmpty
+
+/-- Independent IO inputs, evaluated with a bounded number of local tasks.
+Transformations and the terminal fold still run locally; all tasks are joined
+before an IO exception can escape. The input array should be a bounded batch. -/
+def ofArrayIO (values : Array σ) (read : σ → IO α) : ReducerParIO α where
+  run := fun cfg q => do
+    let results ← mapTasks (2 ^ cfg.maxDepth) values read
+    return (Internal.foldArrayTask cfg q results).get
 
 def ofArray (as : Array α) : ReducerPar α where
   run := fun cfg q => (Internal.foldArrayTask cfg q as).get
@@ -330,5 +348,19 @@ def avg [Monad m] (xs : ReducerParM m Float) : m (Option Float) :=
   ReducerPar.avgFloatM xs
 
 end ReducerParM
+
+namespace ReducerParIO
+
+/-- Checked parsing stays fused and errors are selected in source order,
+independently of task completion order. -/
+def tryMap (xs : ReducerParIO α) (f : α → Except String β) : ReducerParIO β where
+  run := fun cfg q => do
+    let result ← xs.run cfg {
+      unit := Except.ok q.unit
+      combine := fun left right => do return q.combine (← left) (← right)
+      step := fun a rest => do return q.step (← f a) (← rest) }
+    IO.ofExcept result
+
+end ReducerParIO
 
 end LeanReducers
