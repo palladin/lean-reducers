@@ -2,6 +2,7 @@ import Init.Data.ByteArray
 import Init.System.IO
 import Std.Sync.Mutex
 import LeanReducers.Config
+import LeanReducers.ByteSource
 import LeanReducers.FoldSpec
 import LeanReducers.Internal.Lines
 
@@ -28,102 +29,62 @@ def processSampleString : IO String :=
 def newlineByte : UInt8 :=
   10
 
-def preadNat (path : System.FilePath) (offset bytes : Nat) : IO ByteArray :=
-  pread path offset.toUInt64 bytes.toUInt64
+def fileSource (path : System.FilePath) : IO ByteSource := do
+  let size := (← path.metadata).byteSize.toNat
+  return { size, name := path.toString
+           read := fun offset count => pread path offset.toUInt64 (min count (size - offset)).toUInt64 }
 
-def byteAt? (path : System.FilePath) (pos : Nat) : IO (Option UInt8) := do
-  let bytes ← preadNat path pos 1
-  if bytes.size == 0 then
-    pure none
-  else
-    pure (some (bytes.get! 0))
+private def readExact (source : ByteSource) (offset count : Nat) : IO ByteArray := do
+  let expected := min count (source.size - offset)
+  let bytes ← source.read offset expected
+  unless bytes.size == expected do throw (IO.userError s!"Short read from {source.name}")
+  return bytes
 
-partial def findByteFrom (bytes : ByteArray) (target : UInt8) (idx : Nat) : Option Nat :=
-  if idx < bytes.size then
-    if bytes.get! idx == target then
-      some idx
+private partial def nextLineStart (source : ByteSource) (pos remaining : Nat) : IO Nat := do
+  if pos ≥ source.size then return source.size
+  if remaining == 0 then throw (IO.userError "Line exceeds maxLineBytes")
+  let bytes ← readExact source pos (min 8192 remaining)
+  if let some index := bytes.data.findIdx? (· == newlineByte) then return pos + index + 1
+  nextLineStart source (pos + bytes.size) (remaining - bytes.size)
+
+private def lineBoundary (source : ByteSource) (pos limit : Nat) : IO Nat := do
+  if pos == 0 then return 0
+  if pos ≥ source.size then return source.size
+  let previous ← readExact source (pos - 1) 1
+  if previous.get! 0 == newlineByte then return pos
+  nextLineStart source pos limit
+
+private def foldLineRange (cfg : Config) (q : FoldSpec String ρ)
+    (range : ByteRange ByteSource) (trailingEmpty : Bool) : IO ρ := do
+  let source := range.source
+  let start ← lineBoundary source range.start cfg.maxLineBytes
+  let stop ← lineBoundary source range.stop cfg.maxLineBytes
+  if start ≥ stop then return q.unit
+  let bytes ← readExact source start (stop - start)
+  let mut length := 0
+  for byte in bytes do
+    if byte == newlineByte then length := 0
     else
-      findByteFrom bytes target (idx + 1)
-  else
-    none
+      length := length + 1
+      if length > cfg.maxLineBytes then throw (IO.userError "Line exceeds maxLineBytes")
+  let some text := String.fromUTF8? bytes
+    | throw (IO.userError s!"Non UTF-8 data in {source.name}")
+  return foldLinesRight text q.unit q.step
+    (dropTrailingEmpty := !trailingEmpty || stop < source.size)
 
-partial def findNextLineStart (path : System.FilePath) (fileSize pos : Nat) : IO Nat := do
-  if pos >= fileSize then
-    pure fileSize
-  else
-    let bytesToRead := min 8192 (fileSize - pos)
-    let bytes ← preadNat path pos bytesToRead
-    match findByteFrom bytes newlineByte 0 with
-    | some idx => pure (pos + idx + 1)
-    | none =>
-        if bytes.size == 0 then
-          pure fileSize
-        else
-          findNextLineStart path fileSize (pos + bytes.size)
-
-def lineChunkStart (path : System.FilePath) (fileSize start : Nat) : IO Nat := do
-  if start == 0 then
-    pure 0
-  else
-    match (← byteAt? path (start - 1)) with
-    | some b =>
-        if b == newlineByte then
-          pure start
-        else
-          findNextLineStart path fileSize start
-    | none => pure fileSize
-
-def lineChunkStop (path : System.FilePath) (fileSize stop : Nat) : IO Nat := do
-  if stop >= fileSize then
-    pure fileSize
-  else if stop == 0 then
-    pure 0
-  else
-    match (← byteAt? path (stop - 1)) with
-    | some b =>
-        if b == newlineByte then
-          pure stop
-        else
-          findNextLineStart path fileSize stop
-    | none => pure fileSize
-
-def foldLineString (q : FoldSpec String ρ) (isFinal : Bool) (text : String) : ρ :=
-  foldLinesRight text q.unit q.step (dropTrailingEmpty := !isFinal)
-
-def foldFileLineRange (q : FoldSpec String ρ) (path : System.FilePath)
-    (fileSize start stop : Nat) : IO ρ := do
-  let actualStart ← lineChunkStart path fileSize start
-  let actualStop ← lineChunkStop path fileSize stop
-  if actualStart >= actualStop then
-    pure q.unit
-  else
-    let bytes ← preadNat path actualStart (actualStop - actualStart)
-    match String.fromUTF8? bytes with
-    | some text => pure (foldLineString q (actualStop >= fileSize) text)
-    | none => throw <| IO.userError s!"Tried to read file '{path}' containing non UTF-8 data."
-
-structure FileLineRange where
-  source : System.FilePath
-  fileSize : Nat
-  start : Nat
-  stop : Nat
+abbrev FileLineRange := ByteRange ByteSource
 
 def fileLineRangeOfPath (path : System.FilePath) : IO FileLineRange := do
-  let metadata ← path.metadata
-  let fileSize := metadata.byteSize.toNat
-  pure { source := path, fileSize := fileSize, start := 0, stop := fileSize }
+  let source ← fileSource path
+  return { source, start := 0, stop := source.size }
 
-def fileLineRangesOfPaths (paths : Array System.FilePath) : IO (Array FileLineRange) := do
-  let mut ranges := #[]
-  for path in paths do
-    ranges := ranges.push (← fileLineRangeOfPath path)
-  pure ranges
+def fileLineRangesOfPaths (paths : Array System.FilePath) : IO (Array FileLineRange) :=
+  paths.mapM fileLineRangeOfPath
 
-def fileLineRangeBytes (range : FileLineRange) : Nat :=
-  range.stop - range.start
+def fileLineRangeBytes (range : FileLineRange) : Nat := range.size
 
 def fileLineRangesBytes (ranges : Array FileLineRange) : Nat :=
-  ranges.foldl (fun total range => total + fileLineRangeBytes range) 0
+  ranges.foldl (fun total range => total + range.size) 0
 
 structure DiagnosticsState where
   totalBytes : Nat
@@ -564,66 +525,16 @@ private def noteRangeAbort (diagnostics? : Option (Std.Mutex DiagnosticsState)) 
       diagnostics.atomically do
         modify fun s => { s with activeRanges := s.activeRanges - 1 }
 
-def foldFileLineSourceRange (q : FoldSpec String ρ) (range : FileLineRange) : IO ρ := do
-  if range.fileSize == 0 then
-    pure (q.step "" q.unit)
-  else
-    foldFileLineRange q range.source range.fileSize range.start range.stop
-
-def splitFileLineRangesByCount (ranges : Array FileLineRange) :
-    Option (Array FileLineRange × Array FileLineRange) :=
-  let mid := ranges.size / 2
-  if mid == 0 || mid == ranges.size then
-    none
-  else
-    some (ranges.extract 0 mid, ranges.extract mid ranges.size)
-
-def splitFileLineRangesAtHalf (ranges : Array FileLineRange) :
-    Option (Array FileLineRange × Array FileLineRange) :=
-  let total := fileLineRangesBytes ranges
-  if total == 0 then
-    splitFileLineRangesByCount ranges
-  else
-    let target := total / 2
-    if target == 0 then
-      splitFileLineRangesByCount ranges
-    else
-      Id.run do
-        let mut left : Array FileLineRange := #[]
-        let mut right : Array FileLineRange := #[]
-        let mut leftBytes := 0
-        let mut onRight := false
-        for range in ranges do
-          if onRight then
-            right := right.push range
-          else
-            let bytes := fileLineRangeBytes range
-            if bytes == 0 then
-              left := left.push range
-            else if leftBytes + bytes < target then
-              left := left.push range
-              leftBytes := leftBytes + bytes
-            else if leftBytes + bytes == target then
-              left := left.push range
-              leftBytes := target
-              onRight := true
-            else
-              let cutBytes := target - leftBytes
-              if cutBytes == 0 then
-                right := right.push range
-              else if cutBytes >= bytes then
-                left := left.push range
-                leftBytes := leftBytes + bytes
-              else
-                let mid := range.start + cutBytes
-                left := left.push { range with stop := mid }
-                right := right.push { range with start := mid }
-                leftBytes := target
-              onRight := true
-        if left.isEmpty || right.isEmpty then
-          splitFileLineRangesByCount ranges
-        else
-          some (left, right)
+def foldFileLineSourceRange (cfg : Config) (q : FoldSpec String ρ)
+    (range : FileLineRange) (trailingEmpty : Bool := true) : IO ρ := do
+  unless range.start ≤ range.stop && range.stop ≤ range.source.size do
+    throw (IO.userError "Invalid source byte range")
+  if range.source.size == 0 then
+    return if trailingEmpty then q.step "" q.unit else q.unit
+  let mut result := q.unit
+  for part in ByteRange.partition #[range] cfg.maxReadBytes do
+    result := q.combine result (← foldLineRange cfg q part trailingEmpty)
+  return result
 
 def foldFileLineRangesIORange (diagnostics? : Option (Std.Mutex DiagnosticsState))
     (unit : ρ) (combine : ρ → ρ → ρ) (foldOne : FileLineRange → IO ρ)
@@ -654,21 +565,27 @@ partial def foldFileLineRangesIOCore (cfg : Config) (unit : ρ) (combine : ρ �
       else if bytes ≤ 1 then
         foldFileLineRangesIORange diagnostics? unit combine foldOne ranges
       else
-        match splitFileLineRangesAtHalf ranges with
+        match ByteRange.splitAtHalf ranges with
         | none => foldFileLineRangesIORange diagnostics? unit combine foldOne ranges
         | some (leftRanges, rightRanges) =>
             let rightTask ← IO.asTask
               (foldFileLineRangesIOCore cfg unit combine diagnostics? foldOne rightRanges depth)
               cfg.priority
-            let left ← foldFileLineRangesIOCore cfg unit combine diagnostics? foldOne leftRanges depth
-            match rightTask.get with
+            let left ← try
+              pure (.ok (← foldFileLineRangesIOCore cfg unit combine diagnostics? foldOne leftRanges depth))
+            catch error => pure (Except.error error)
+            -- Join even when the left half failed; resource scopes cannot exit
+            -- while their right-hand tasks still use the reader.
+            let right ← IO.wait rightTask
+            let left ← IO.ofExcept left
+            match right with
             | Except.ok right => pure (combine left right)
             | Except.error err => throw err
 
 def foldFileLineRangesIO (cfg : Config) (q : FoldSpec String ρ)
-    (ranges : Array FileLineRange) : IO ρ :=
+    (ranges : Array FileLineRange) (trailingEmpty : Bool := true) : IO ρ :=
   withRangeDiagnostics cfg ranges fun diagnostics? =>
-    foldFileLineRangesIOCore cfg q.unit q.combine diagnostics? (foldFileLineSourceRange q)
+    foldFileLineRangesIOCore cfg q.unit q.combine diagnostics? (fun range => foldFileLineSourceRange cfg q range trailingEmpty)
       ranges cfg.maxDepth
 
 def foldFileLinesIO (cfg : Config) (q : FoldSpec String ρ)
@@ -691,7 +608,7 @@ def foldFileLineRangesWithPathIO (cfg : Config) (q : FoldSpec (System.FilePath �
     (ranges : Array FileLineRange) : IO ρ :=
   withRangeDiagnostics cfg ranges fun diagnostics? =>
     foldFileLineRangesIOCore cfg q.unit q.combine diagnostics?
-      (fun range => foldFileLineSourceRange (fileLineWithPathSpec q range.source) range)
+      (fun range => foldFileLineSourceRange cfg (fileLineWithPathSpec q range.source.name) range)
       ranges cfg.maxDepth
 
 def foldFilesLinesWithPathIO (cfg : Config) (q : FoldSpec (System.FilePath × String) ρ)

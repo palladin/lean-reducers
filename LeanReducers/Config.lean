@@ -52,11 +52,20 @@ through the configured output sink and do not affect reducer results.
 structure Config where
   grain : Nat := 2048
   maxDepth : Nat := 4
+  /-- Bound each leaf read independently of task-tree depth. -/
+  maxReadBytes : Nat := 8 * 1024 * 1024
+  /-- Bound line-boundary repair and reject oversized lines. -/
+  maxLineBytes : Nat := 64 * 1024 * 1024
   priority : Task.Priority := Task.Priority.default
   diagnostics : DiagnosticsConfig := {}
   deriving Repr
 
 namespace Config
+
+/-- Use at most the advertised number of leaf tasks (rounded down to a power
+of two). This is a concurrency budget, not physical CPU affinity. -/
+def forCPUs (cpus : Nat) (cfg : Config := {}) : Config :=
+  { cfg with maxDepth := (max 1 cpus).log2 }
 
 def default : Config := {}
 

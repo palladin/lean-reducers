@@ -328,3 +328,33 @@ auto-detect the CPU count.
   they do not build intermediate pipeline collections.
 - `groupBy` uses a `Std.HashMap` accumulator internally and returns an
   `Array (key × value)` at the API boundary.
+
+### Seekable sources and distributed ranges
+
+`ByteSource` adapts an immutable file or blob with a size and a concurrent-safe
+`read offset count` operation. Reads return exactly the requested bytes (clipped
+to EOF), or throw. The adapter is responsible for integrity checks and caching.
+
+`ByteRange.partition` splits descriptors without reading data. Workers can each
+receive some of these ranges and use `ReducerPar.readSourceRanges`. Local files
+and remote sources share the same multicore task tree and newline repair:
+
+```lean
+let ranges := ByteRange.partition #[⟨source, 0, source.size⟩] (32 * 1024 * 1024)
+let count ← (ReducerPar.readSourceRanges ranges).map String.length |>.sum
+```
+
+Adjacent ranges may cut through a line or UTF-8 character; each line belongs to
+the range containing its starting byte. Outputs retain source order. By default,
+empty files and trailing newlines follow `String.splitOn "\n"`; pass `false` as
+`readSourceRanges`' second argument to omit the final empty element for NDJSON.
+
+`Config.forCPUs n` caps the task tree at the largest power of two not exceeding
+`n`. `maxReadBytes` (8 MiB) bounds leaf reads even when the tree cannot split
+further. `maxLineBytes` (64 MiB) bounds boundary repair and rejects oversized
+lines. A read may include up to one additional line beyond its nominal range.
+
+`ReducerParIO.tryMap` keeps checked parsing fused into reduction. Errors are
+selected in source order. `ReducerPar.ofArrayIO` runs independent IO inputs in
+bounded batches, and `mapTasks` exposes its ordered IO mapping primitive. Every
+started task is joined before errors escape, including failed file reads.
